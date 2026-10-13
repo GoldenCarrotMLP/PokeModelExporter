@@ -159,6 +159,21 @@ switch (rest[0])
         break;
     }
 
+    case "extract-many": // extract-many <list file of archive paths> <output dir>: each file under its own name
+    {
+        Directory.CreateDirectory(rest[2]);
+        int n = 0;
+        foreach (var path in File.ReadAllLines(rest[1]).Where(l => l.Trim().Length > 0))
+        {
+            var data = archive.Read(path.Trim());
+            if (data == null) continue;
+            File.WriteAllBytes(Path.Combine(rest[2], Path.GetFileName(path.Trim())), data);
+            n++;
+        }
+        Console.WriteLine($"{n} files -> {rest[2]}");
+        break;
+    }
+
     case "catalog": // catalog [species...]: the game's species -> model table (pokemon/catalog/.../poke_resource_table.trpmcatalog)
     {
         var cat = FbTable.Root(archive.Read("pokemon/catalog/catalog/poke_resource_table.trpmcatalog"));
@@ -376,6 +391,241 @@ switch (rest[0])
         break;
     }
 
+    case "timeline": // timeline <move number> [--all-conditions]: a move's effect timeline (effect/battle_ew/ew<move>/ew<move>.trtml)
+    {
+        string path = $"effect/battle_ew/ew{int.Parse(rest[1]):D4}/ew{int.Parse(rest[1]):D4}.trtml";
+        var data = archive.Read(path);
+        if (data == null) { Console.Error.WriteLine("not found: " + path); return 1; }
+        var timeline = SvMoveTimeline.Read(data);
+        Console.WriteLine($"{path}: {timeline.Frames} frames, {timeline.Groups.Count} groups");
+        foreach (var group in timeline.Groups)
+        {
+            var conditions = group.Conditions.Where(c => rest.Contains("--all-conditions") || c.Value != "None");
+            Console.WriteLine($"\n[{group.Object}]  {string.Join("  ", conditions.Select(c => $"{c.Key}={c.Value}"))}");
+            foreach (var track in group.Tracks)
+                foreach (var c in track.Commands.OrderBy(c => c.Start))
+                    Console.WriteLine($"   {c.Start,4}-{c.End,-4} {track.Name,-12} {c.Type,-34} " +
+                        string.Join("  ", c.Parameters.Select(p => $"{p.Key}={SvMoveTimeline.Format(p.Value)}")));
+        }
+        break;
+    }
+
+    case "timelines": // timelines: survey every move timeline (command types, parameters, conditions)
+    {
+        var types = new SortedDictionary<string, int>(StringComparer.Ordinal);
+        var conditionValues = new SortedDictionary<string, SortedSet<string>>(StringComparer.Ordinal);
+        int found = 0, failed = 0;
+        for (int move = 0; move < 1000; move++)
+        {
+            var data = archive.Read($"effect/battle_ew/ew{move:D4}/ew{move:D4}.trtml");
+            if (data == null) continue;
+            found++;
+            try
+            {
+                foreach (var group in SvMoveTimeline.Read(data).Groups)
+                {
+                    foreach (var c in group.Conditions)
+                    {
+                        if (!conditionValues.TryGetValue(c.Key, out var set)) conditionValues[c.Key] = set = new SortedSet<string>(StringComparer.Ordinal);
+                        set.Add(c.Value);
+                    }
+                    foreach (var c in group.Tracks.SelectMany(t => t.Commands))
+                    {
+                        string key = c.Type + " (" + string.Join(", ", c.Parameters.Keys.OrderBy(k => k, StringComparer.Ordinal)) + ")";
+                        types[key] = types.TryGetValue(key, out int n) ? n + 1 : 1;
+                    }
+                }
+            }
+            catch (Exception e) { failed++; Console.WriteLine($"ew{move:D4}: {e.Message}"); }
+        }
+        Console.WriteLine($"{found} timelines, {failed} failed\n\nconditions:");
+        foreach (var c in conditionValues) Console.WriteLine($"  {c.Key}: {string.Join(", ", c.Value)}");
+        Console.WriteLine("\ncommands:");
+        foreach (var t in types.OrderByDescending(t => t.Value)) Console.WriteLine($"  {t.Value,6}  {t.Key}");
+        break;
+    }
+
+    case "particles": // particles <ptcl path in the archive>...: every emitter of particle files (VFXB)
+    {
+        foreach (var path in rest.Skip(1).Where(a => !a.StartsWith("--")))
+        {
+            var data = archive.Read(path);
+            if (data == null) { Console.Error.WriteLine("not found: " + path); return 1; }
+            var ptcl = VfxbFile.Read(data);
+            if (rest.Count > 2) Console.WriteLine($"file {path}");
+            foreach (var set in ptcl.Sets)
+            {
+                Console.WriteLine($"set {set.Name}");
+                foreach (var e in set.Emitters) PrintEmitter(e, ptcl, "  ");
+            }
+        }
+        break;
+    }
+
+    case "movefx": // movefx --hashes <hashes_inside_fd.txt> --out <dir> [move numbers...]: every move's effects as <dir>/<move, 4 digits>.json
+    {
+        int h = rest.IndexOf("--hashes"), o = rest.IndexOf("--out");
+        string outDir = Path.GetFullPath(rest[o + 1]);
+        Directory.CreateDirectory(outDir);
+        var only = new HashSet<int>(rest.Skip(1).Where(a => int.TryParse(a, out _)).Select(int.Parse).Where(n => n > 0 && (h < 0 || n.ToString() != rest[h + 1])));
+        var byMove = new SortedDictionary<int, List<string>>();
+        foreach (var line in File.ReadLines(rest[h + 1]))
+        {
+            string path = line.Substring(line.IndexOf(' ') + 1);
+            var m = System.Text.RegularExpressions.Regex.Match(path, @"^effect/battle_ew/ew(\d{4})/(ew\d{4}(?:_\d+)?)\.(trtml|trsot)$|^effect/battle_ew/ew(\d{4})/(ew\d{4}(?:_\d+)?)_0\.trsot$");
+            if (!m.Success) continue;
+            int move = int.Parse(m.Groups[1].Success ? m.Groups[1].Value : m.Groups[4].Value);
+            if (only.Count > 0 && !only.Contains(move)) continue;
+            if (!byMove.TryGetValue(move, out var list)) byMove[move] = list = new List<string>();
+            list.Add(path);
+        }
+        long total = 0;
+        int files = 0, emitters = 0;
+        var watch = System.Diagnostics.Stopwatch.StartNew();
+        var textureSources = new SortedDictionary<string, (string path, int cx, int cy)>(StringComparer.Ordinal);
+        var primitiveShapes = new SortedDictionary<string, FxPrimitiveShape>(StringComparer.Ordinal);
+        foreach (var kv in byMove)
+        {
+            var timelines = new Dictionary<string, byte[]>();
+            var scenes = new Dictionary<string, byte[]>();
+            foreach (var path in kv.Value)
+            {
+                string stem = Path.GetFileNameWithoutExtension(path);
+                var data = archive.Read(path);
+                if (data == null) continue;
+                if (path.EndsWith(".trtml", StringComparison.Ordinal)) timelines[stem] = data;
+                else if (stem.EndsWith("_0", StringComparison.Ordinal)) scenes[stem.Substring(0, stem.Length - 2)] = data;
+            }
+            if (timelines.Count == 0) continue;
+            string json = SvMoveFx.Export(kv.Key, timelines, scenes, archive.Read, out int count,
+                (path, name, cx, cy) => { if (!textureSources.ContainsKey(name)) textureSources[name] = (path, cx, cy); },
+                (path, name, prim) => { if (!primitiveShapes.ContainsKey(name)) { var shape = FxPrimitiveShape.Analyze(prim); shape.Source = path; primitiveShapes[name] = shape; } });
+            string file = Path.Combine(outDir, $"{kv.Key:D4}.json");
+            File.WriteAllText(file, json);
+            total += json.Length; files++; emitters += count;
+        }
+        Console.WriteLine($"{files} moves, {emitters} emitters, {total / 1024} KB -> {outDir} ({watch.ElapsedMilliseconds} ms)");
+
+        // Primitive shapes (primitives.json).
+        var pw = new JsonWriter(indent: false);
+        pw.BeginObject();
+        foreach (var kv in primitiveShapes) { pw.Name(kv.Key); kv.Value.Write(pw); }
+        pw.EndObject();
+        File.WriteAllText(Path.Combine(outDir, "primitives.json"), pw.ToString());
+        Console.WriteLine($"{primitiveShapes.Count} primitive shapes ({primitiveShapes.Count(p => p.Value.Kind == "revolution")} round) -> primitives.json");
+
+        // Texture shapes (textures.json): analysed from the first particle file that has each texture.
+        var tw = new JsonWriter(indent: false);
+        tw.BeginObject();
+        var bntxCache = new Dictionary<string, (byte[] bntx, Dictionary<string, int> index)>();
+        int analysed = 0;
+        foreach (var t in textureSources)
+        {
+            if (!bntxCache.TryGetValue(t.Value.path, out var entry))
+            {
+                var ptcl = VfxbFile.Read(archive.Read(t.Value.path));
+                var bytes = ptcl.Bntx.Count > 0 ? ptcl.Bntx.ToArray() : null;
+                var index = new Dictionary<string, int>();
+                if (bytes != null) for (int i = 0; i < Bntx.Count(bytes); i++) index[Bntx.Name(bytes, i)] = i;
+                bntxCache[t.Value.path] = entry = (bytes, index);
+            }
+            if (entry.bntx == null || !entry.index.TryGetValue(t.Key, out int at)) continue;
+            try
+            {
+                var tex = Bntx.Read(entry.bntx, at);
+                var shape = FxTextureShape.Analyze(FxTextureShape.Mask(tex.Rgba, tex.Width, tex.Height, tex.Format), tex.Width, tex.Height, t.Value.cx, t.Value.cy);
+                shape.Source = t.Value.path;
+                tw.Name(t.Key);
+                shape.Write(tw);
+                analysed++;
+            }
+            catch (Exception e) { Console.WriteLine($"{t.Key}: {e.Message}"); }
+        }
+        tw.EndObject();
+        File.WriteAllText(Path.Combine(outDir, "textures.json"), tw.ToString());
+        Console.WriteLine($"{analysed}/{textureSources.Count} texture shapes -> textures.json ({watch.ElapsedMilliseconds} ms)");
+        break;
+    }
+
+    case "particle-textures": // particle-textures <ptcl path in the archive> <out dir>: the textures inside a particle file as PNG (reference only)
+    {
+        var ptcl = VfxbFile.Read(archive.Read(rest[1]));
+        if (ptcl.Bntx.Count == 0) { Console.WriteLine("no textures"); break; }
+        var bntx = ptcl.Bntx.ToArray();
+        Directory.CreateDirectory(rest[2]);
+        for (int i = 0; i < Bntx.Count(bntx); i++)
+        {
+            string name = Bntx.Name(bntx, i);
+            try
+            {
+                var tex = Bntx.Read(bntx, i);
+                File.WriteAllBytes(Path.Combine(rest[2], name + ".png"), Png.Encode(tex.Rgba, tex.Width, tex.Height));
+                Console.WriteLine($"{name}: {tex.Width}x{tex.Height} format 0x{tex.Format:X4}");
+            }
+            catch (Exception e) { Console.WriteLine($"{name}: {e.Message}"); }
+        }
+        break;
+    }
+
+    case "particles-survey": // particles-survey --hashes <hashes_inside_fd.txt>: parse every move particle file, count what they use
+    {
+        int h = rest.IndexOf("--hashes");
+        var paths = File.ReadLines(rest[h + 1]).Select(l => l.Substring(l.IndexOf(' ') + 1))
+            .Where(p => p.StartsWith("effect/battle_ew/", StringComparison.Ordinal) && p.EndsWith(".ptcl", StringComparison.Ordinal)).ToList();
+        var counts = new SortedDictionary<string, int>(StringComparer.Ordinal);
+        void Count(string key) => counts[key] = counts.TryGetValue(key, out int n) ? n + 1 : 1;
+        var textures = new Dictionary<string, int>();
+        var primNames = new Dictionary<string, int>();
+        int files = 0, emitters = 0, bad = 0, failed = 0;
+        void Visit(VfxbEmitter e, VfxbFile f, int depth)
+        {
+            emitters++;
+            if (e.ParsedSize != e.BinarySize) { bad++; if (bad <= 5) Console.WriteLine($"size {e.ParsedSize} != {e.BinarySize}: {e.Name}"); }
+            Count($"blend {e.BlendType}"); Count($"billboard {e.BillboardType}"); Count($"volume {e.VolumeType}");
+            Count($"color0 type {e.Color0Type}"); Count($"alpha0 type {e.Alpha0Type}"); Count($"follow {e.FollowType}");
+            Count($"colorCombiner {e.ColorCombiner}"); Count($"alphaCombiner {e.AlphaCombiner}"); Count($"shaderType {e.ShaderType}");
+            Count($"customShader {e.CustomShaderIndex} type {e.ShaderRefType} user {e.UserShaderIndex1}/{e.UserShaderIndex2}");
+            int used = e.Samplers.Count(s => s.Used);
+            Count($"combine[{used} tex] blend c{e.Texture1ColorBlend}{e.Texture2ColorBlend} a{e.Texture1AlphaBlend}{e.Texture2AlphaBlend} in c{string.Join("", e.TextureColorInput)} a{string.Join("", e.TextureAlphaInput)}");
+            Count($"textures used {e.Samplers.Count(s => s.Used)}"); Count($"child depth {depth}");
+            if (e.PrimitiveId != ulong.MaxValue)
+            {
+                Count("uses primitive");
+                if (!f.Primitives.TryGetValue(e.PrimitiveId, out var prim)) Count("primitive unresolved");
+                else if (prim.Positions == null || prim.Indices == null) Count("primitive without mesh");
+                else { Count("primitive decoded"); var key = System.Text.RegularExpressions.Regex.Replace(prim.Name, @"^(cpm|upm)_(ew\d+_)?", ""); primNames[key] = primNames.TryGetValue(key, out int pn) ? pn + 1 : 1; }
+            }
+            if (e.OneTime) Count("one time"); if (e.InfiniteLife) Count("infinite life");
+            foreach (var a in e.Animations.Keys) Count("anim " + a);
+            foreach (var a in e.Attributes) Count("attr " + a);
+            foreach (var s in e.Samplers.Where(s => s.Used))
+            {
+                string name = f.TextureNames.TryGetValue(s.TextureId, out var n) ? n : "?";
+                textures[name] = textures.TryGetValue(name, out int c) ? c + 1 : 1;
+            }
+            foreach (var c in e.Children) Visit(c, f, depth + 1);
+        }
+        foreach (var path in paths)
+        {
+            var data = archive.Read(path);
+            if (data == null) continue;
+            try
+            {
+                var f = VfxbFile.Read(data);
+                files++;
+                foreach (var e in f.Sets.SelectMany(s => s.Emitters)) Visit(e, f, 0);
+            }
+            catch (Exception ex) { failed++; if (failed <= 5) Console.WriteLine($"{path}: {ex.Message}"); }
+        }
+        Console.WriteLine($"{files}/{paths.Count} files, {failed} failed, {emitters} emitters, {bad} with a size mismatch, {textures.Count} distinct textures");
+        foreach (var c in counts) Console.WriteLine($"  {c.Value,7}  {c.Key}");
+        Console.WriteLine("\nprimitives by use:");
+        foreach (var t in primNames.OrderByDescending(t => t.Value).Take(60)) Console.WriteLine($"  {t.Value,6}  {t.Key}");
+        Console.WriteLine("\ntextures by use:");
+        foreach (var t in textures.OrderByDescending(t => t.Value).Take(rest.Contains("--all") ? int.MaxValue : 80)) Console.WriteLine($"  {t.Value,6}  {t.Key}");
+        break;
+    }
+
     case "audit": // audit <national dex> --hashes <hashes_inside_fd.txt>: what the converter uses vs. leaves out
     {
         var model = LoadModelFrom(archive, rest, out string folder);
@@ -480,6 +730,32 @@ static List<string> FolderFiles(List<string> rest, string folder)
 
 // PokeDocs schemas (no license; not bundled): read from --schemas <dir> (a PokeDocs SV/Flatbuffers folder),
 // else downloaded once from GitHub into %LOCALAPPDATA%/PokeModelExporter/schemas/SV.
+static void PrintEmitter(VfxbEmitter e, VfxbFile f, string indent)
+{
+    string F(float[] v) => "(" + string.Join(", ", v.Select(x => x.ToString("0.###", System.Globalization.CultureInfo.InvariantCulture))) + ")";
+    string K(VfxbKey[] keys) => keys.Length == 0 ? "-" : string.Join(" ", keys.Select(k => $"{k.Time:0.##}:{k.X:0.##},{k.Y:0.##},{k.Z:0.##}"));
+    var tex = e.Samplers.Where(s => s.Used).Select(s => f.TextureNames.TryGetValue(s.TextureId, out var n) ? n : $"#{s.TextureId:X}");
+    Console.WriteLine($"{indent}{e.Name}{(e.ParsedSize != e.BinarySize ? $"  !! parsed {e.ParsedSize} of {e.BinarySize} bytes" : "")}");
+    Console.WriteLine($"{indent}  emit: {(e.OneTime ? "once" : "loop")} start {e.EmitStart} duration {e.EmitDuration} rate {e.Rate}±{e.RateRandom} interval {e.Interval}  life {e.Life}±{e.LifeRandom}{(e.InfiniteLife ? " infinite" : "")}  follow {e.FollowType}");
+    Console.WriteLine($"{indent}  shape {e.VolumeType} radius {F(e.VolumeRadius)} sweep {e.SweepLongitude:0.##}  velocity all {e.AllDirection} dir {e.DirectionalScale}*{F(e.Direction)} diffusion {e.DiffusionAngle} random {e.VelocityRandom}  gravity {F(e.Gravity)} air {e.AirResistance}");
+    Console.WriteLine($"{indent}  draw: billboard {e.BillboardType} offset {e.OffsetType} blend {e.BlendType} combiner {e.ColorCombiner}/{e.AlphaCombiner} shader {e.ShaderType} soft {e.SoftParticle} flags {e.StaticFlags[0]:X8}  textures {string.Join(", ", tex)}{(e.PrimitiveId != ulong.MaxValue ? $"  primitive {e.PrimitiveId:X}" : "")}");
+    Console.WriteLine($"{indent}  scale {F(e.ParticleScale)}±{F(e.ParticleScaleRandom)} keys {K(e.ScaleKeys)}  rotate init {F(e.RotateInit)}±{F(e.RotateInitRandom)} add {F(e.RotateAdd)}±{F(e.RotateAddRandom)}");
+    Console.WriteLine($"{indent}  color0 [{e.Color0Type}] {F(e.Color0)} keys {K(e.Color0Keys)}  alpha0 [{e.Alpha0Type}] {e.Alpha0} keys {K(e.Alpha0Keys)}");
+    Console.WriteLine($"{indent}  color1 [{e.Color1Type}] {F(e.Color1)} keys {K(e.Color1Keys)}  alpha1 [{e.Alpha1Type}] {e.Alpha1}  emitter color {F(e.EmitterColor0)} scale {F(e.Scale)} translate {F(e.Translate)}");
+    Console.WriteLine($"{indent}  shader {e.ShaderIndex} (type {e.ShaderRefType}, compute {e.ComputeShaderIndex}, user {e.UserShaderIndex1}/{e.UserShaderIndex2}, custom {e.CustomShaderIndex})  combine in c{string.Join("", e.TextureColorInput)} a{string.Join("", e.TextureAlphaInput)} blend c{e.Texture1ColorBlend}{e.Texture2ColorBlend} a{e.Texture1AlphaBlend}{e.Texture2AlphaBlend}");
+    if (e.Patterns[0].Count > 1 || e.TextureAnims[0].Scroll) Console.WriteLine($"{indent}  tex0 pattern {e.Patterns[0].Count} every {e.Patterns[0].Frequency} type {e.TextureAnims[0].PatternType}  uv div {F(e.Scrolls[0].UVDivisions)} scroll {F(e.Scrolls[0].ScrollAdd)}");
+    foreach (var a in e.Animations) Console.WriteLine($"{indent}  anim {a.Key}: {K(a.Value.Keys)}");
+    Console.WriteLine($"{indent}  colorScale {e.ColorScale}");
+    foreach (var a in e.AttributeData) Console.WriteLine($"{indent}  attr {a.Key} ({a.Value.Length} floats): " + string.Join(" ", a.Value.Select((f, i) => $"[{i * 4}]{f:0.###}")));
+    for (int i = 0; i < 3; i++)
+        if (e.Samplers[i].Used)
+        {
+            var sc = e.Scrolls[i];
+            Console.WriteLine($"{indent}  tex{i} scroll: add {F(sc.ScrollAdd)} start {F(sc.Scroll)} rnd {F(sc.ScrollRandom)} scaleAdd {F(sc.ScaleAdd)} scale {F(sc.Scale)} scaleRnd {F(sc.ScaleRandom)} rot {sc.RotationAdd} {sc.Rotation} {sc.RotationRandom} {sc.RotationType} div {F(sc.UVDivisions)} base {F(sc.Unused)}  pattern {e.Patterns[i].Count}/{e.Patterns[i].Frequency} repeat {e.TextureAnims[i].Repeat} wrap {e.Samplers[i].WrapU}/{e.Samplers[i].WrapV}");
+        }
+    foreach (var c in e.Children) PrintEmitter(c, f, indent + "    ");
+}
+
 sealed class SchemaCache
 {
     const string Base = "https://raw.githubusercontent.com/pkZukan/PokeDocs/HEAD/SV/Flatbuffers/";
@@ -522,3 +798,4 @@ sealed class SchemaCache
         return _parsed[extension] = schema;
     }
 }
+

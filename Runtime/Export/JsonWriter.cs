@@ -10,6 +10,9 @@ namespace PokeModelExporter.Export
         readonly StringBuilder _sb = new StringBuilder();
         readonly Stack<bool> _first = new Stack<bool>(); // per open container: no element written yet
         bool _afterName;
+        readonly bool _indent;
+
+        public JsonWriter(bool indent = true) { _indent = indent; }
 
         public override string ToString() => _sb.ToString();
 
@@ -22,7 +25,7 @@ namespace PokeModelExporter.Export
         {
             Separator();
             Quote(name);
-            _sb.Append(": ");
+            _sb.Append(_indent ? ": " : ":");
             _afterName = true;
             return this;
         }
@@ -48,13 +51,13 @@ namespace PokeModelExporter.Export
             if (!_first.Peek()) _sb.Append(',');
             _first.Pop();
             _first.Push(false);
-            _sb.Append('\n').Append(' ', _first.Count * 2);
+            if (_indent) _sb.Append('\n').Append(' ', _first.Count * 2);
         }
 
         void Close(char c)
         {
             bool empty = _first.Pop();
-            if (!empty) _sb.Append('\n').Append(' ', _first.Count * 2);
+            if (!empty && _indent) _sb.Append('\n').Append(' ', _first.Count * 2);
             _sb.Append(c);
         }
 

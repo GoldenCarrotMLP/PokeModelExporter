@@ -4,7 +4,7 @@ using System.Text;
 
 namespace PokeModelExporter.Formats
 {
-    // Nintendo Switch texture container (BNTX). Reads the first texture's top mip level and
+    // Nintendo Switch texture container (BNTX). Reads one texture's top mip level and
     // returns RGBA8. Layout (little endian):
     //   0x00 "BNTX" header; 0x20 "NX  " header with 0x28 = offset of the texture info pointer array
     //   BRTI (texture info): 0x12 tile mode, 0x1C format, 0x24 width, 0x28 height,
@@ -21,11 +21,23 @@ namespace PokeModelExporter.Formats
             public byte[] Rgba;
         }
 
-        public static Texture Read(byte[] file, bool normalMap = false)
+        // Number of textures (NX header 0x24) and each one's name (BRTI 0x60 -> u16 length + characters).
+        public static int Count(byte[] file) => BitConverter.ToInt32(file, 0x24);
+
+        public static string Name(byte[] file, int index)
+        {
+            int brti = (int)BitConverter.ToInt64(file, (int)BitConverter.ToInt64(file, 0x28) + 8 * index);
+            int name = (int)BitConverter.ToInt64(file, brti + 0x60);
+            return Encoding.UTF8.GetString(file, name + 2, BitConverter.ToUInt16(file, name));
+        }
+
+        public static Texture Read(byte[] file, bool normalMap = false) => Read(file, 0, normalMap);
+
+        public static Texture Read(byte[] file, int index, bool normalMap = false)
         {
             if (Encoding.ASCII.GetString(file, 0, 4) != "BNTX") throw new InvalidDataException("Not a BNTX file");
             long infoPtrs = BitConverter.ToInt64(file, 0x28);
-            int brti = (int)BitConverter.ToInt64(file, (int)infoPtrs);
+            int brti = (int)BitConverter.ToInt64(file, (int)infoPtrs + 8 * index);
             if (Encoding.ASCII.GetString(file, brti, 4) != "BRTI") throw new InvalidDataException("Missing BRTI");
 
             int tileMode = BitConverter.ToUInt16(file, brti + 0x12);
