@@ -1,0 +1,8 @@
+<Project>
+  <!-- Build output goes to ../.build/ (Unity skips dot-folders): bin/ and obj/ inside this package
+       folder would be imported by Unity, and the CLI's DLL would clash with the Runtime assembly. -->
+  <PropertyGroup>
+    <BaseOutputPath>$(MSBuildThisFileDirectory)../.build/bin/</BaseOutputPath>
+    <BaseIntermediateOutputPath>$(MSBuildThisFileDirectory)../.build/obj/</BaseIntermediateOutputPath>
+  </PropertyGroup>
+</Project>

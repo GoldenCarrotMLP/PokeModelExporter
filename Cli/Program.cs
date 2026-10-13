@@ -38,8 +38,38 @@ if (rest[0] == "texture") // texture <file.bntx> <out.png> [--normal]: decode a 
     return 0;
 }
 
-string arc = new[] { "", "update", "base" }.Select(sub => Path.Combine(gameFolder, sub, "arc"))
-    .FirstOrDefault(d => File.Exists(Path.Combine(d, "data.trpfd")));
+if (rest[0] == "audio") // audio <bank> <EVENT_NAME>... --out <dir> [--switch INDEX,FORM00] [--vgmstream <vgmstream-cli.exe>]: an event's sounds as .wem (+ .wav)
+{
+    string folder = PokeModelExporter.Wwise.WwiseSounds.FindFolder(gameFolder);
+    if (folder == null) { Console.Error.WriteLine($"No audio/wwise/bin/Switch/Init.bnk under {gameFolder}"); return 1; }
+    int o = rest.IndexOf("--out"), v = rest.IndexOf("--vgmstream"), sw = rest.IndexOf("--switch");
+    var switches = sw >= 0 ? rest[sw + 1].Split(',') : new string[0];
+    string outDir = Path.GetFullPath(o >= 0 ? rest[o + 1] : "audio");
+    Directory.CreateDirectory(outDir);
+    var sounds = new PokeModelExporter.Wwise.WwiseSounds(folder);
+    var watch = System.Diagnostics.Stopwatch.StartNew();
+    for (int i = 2; i < rest.Count && !rest[i].StartsWith("--"); i++)
+    {
+        var media = sounds.Resolve(rest[1], rest[i], switches);
+        Console.WriteLine($"{rest[i]} (id {PokeModelExporter.Wwise.WwiseSounds.Hash(rest[i])}): {media.Count} sound(s)");
+        foreach (var m in media)
+        {
+            string wem = Path.Combine(outDir, $"{rest[i]}_{m.Id}.wem");
+            File.WriteAllBytes(wem, sounds.Read(m));
+            Console.WriteLine($"  media {m.Id} in {m.Source} @ {m.Offset}, {m.Size} bytes -> {Path.GetFileName(wem)}");
+            if (v < 0) continue;
+            var run = System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(rest[v + 1], $"-o \"{Path.ChangeExtension(wem, ".wav")}\" \"{wem}\"")
+                { UseShellExecute = false, CreateNoWindow = true, RedirectStandardOutput = true, RedirectStandardError = true });
+            run.StandardOutput.ReadToEnd();
+            run.WaitForExit();
+            Console.WriteLine($"  vgmstream exit {run.ExitCode} -> {Path.GetFileName(Path.ChangeExtension(wem, ".wav"))}");
+        }
+    }
+    Console.WriteLine($"{watch.ElapsedMilliseconds} ms");
+    return 0;
+}
+
+string arc = SvExporter.FindArc(gameFolder);
 if (arc == null) { Console.Error.WriteLine($"No arc/data.trpfd under {gameFolder}"); return 1; }
 if (oodlePath == null) { Console.Error.WriteLine($"No oo2core_*_win64.dll in {games} (README step 5b) and no --oodle given"); return 1; }
 
@@ -48,6 +78,24 @@ using var archive = new TrinityArchive(arc, oodle);
 
 switch (rest[0])
 {
+    case "actor": // actor <dex> [form] [gender] [--shiny] --out <dir>: model.glb + actor.json as a game imports them
+    {
+        int o = rest.IndexOf("--out");
+        string outDir = Path.GetFullPath(o >= 0 ? rest[o + 1] : "actor");
+        using var exporter = new SvExporter(arc, oodlePath);
+        int species = int.Parse(rest[1]);
+        int form = rest.Count > 2 && int.TryParse(rest[2], out int f) ? f : 0;
+        int gender = rest.Count > 3 && int.TryParse(rest[3], out int g) ? g : 0;
+        var watch = System.Diagnostics.Stopwatch.StartNew();
+        var result = exporter.Export(species, form, gender, new SvExporter.Options { Shiny = rest.Contains("--shiny"), ExtraImages = false });
+        if (result == null) { Console.Error.WriteLine($"#{species} is not in this game's catalog"); return 1; }
+        Directory.CreateDirectory(outDir);
+        File.WriteAllBytes(Path.Combine(outDir, "model.glb"), result.Glb);
+        File.WriteAllText(Path.Combine(outDir, "actor.json"), result.ActorManifest);
+        Console.WriteLine($"{result.Folder}: {result.Glb.Length} bytes, {result.Model.Animations.Count} clips, size {result.Config?.SizeName}, {watch.ElapsedMilliseconds} ms -> {outDir}");
+        break;
+    }
+
     case "info":
         Console.WriteLine($"arc:   {arc}");
         Console.WriteLine($"oodle: {oodlePath}");
@@ -163,7 +211,7 @@ switch (rest[0])
         int o = rest.IndexOf("--out");
         string outFile = Path.GetFullPath(o >= 0 ? rest[o + 1] : "model.glb");
         var catalog = new SvCatalog(archive.Read(SvCatalog.Path));
-        var entry = FindEntry(catalog, rest);
+        var entry = FindEntry(catalog, archive, rest);
         var model = LoadModelFrom(archive, rest, out string folder);
         string dir = folder;
         Func<string, byte[]> read = file => archive.Read(dir + file);
@@ -228,7 +276,7 @@ switch (rest[0])
     case "bones": // bones <national dex> [names...]: stored bone matrices vs. our computed bind pose
     {
         var catalog = new SvCatalog(archive.Read(SvCatalog.Path));
-        var entry = catalog.Find(int.Parse(rest[1]));
+        var entry = FindEntry(catalog, archive, rest);
         string folder = SvCatalog.DataRoot + entry.Folder;
         var mdl = FbTable.Root(archive.Read(SvCatalog.DataRoot + entry.ModelPath));
         var skl = FbTable.Root(archive.Read(folder + mdl.Table(2).String(0)));
@@ -395,12 +443,9 @@ static ModelData LoadModel(TrinityArchive archive, List<string> rest) => LoadMod
 static ModelData LoadModelFrom(TrinityArchive archive, List<string> rest, out string folder)
 {
     var catalog = new SvCatalog(archive.Read(SvCatalog.Path));
-    int species = int.Parse(rest[1]);
-    int form = rest.Count > 2 && int.TryParse(rest[2], out int f) ? f : 0;
-    int gender = rest.Count > 3 && int.TryParse(rest[3], out int g) ? g : 0;
-    var entry = catalog.Find(species, form, gender) ?? throw new InvalidOperationException($"#{species} is not in this game's catalog");
+    var entry = FindEntry(catalog, archive, rest);
     folder = SvCatalog.DataRoot + entry.Folder;
-    Console.Error.WriteLine($"#{species} form {form} -> {folder}");
+    Console.Error.WriteLine($"#{rest[1]} -> {folder}");
     string dir = folder;
     return TrinityModelReader.Read(entry.ModelPath.Substring(entry.Folder.Length), name => archive.Read(dir + name),
         shiny: rest.Contains("--shiny"), locatorFiles: entry.LocatorFiles());
@@ -409,37 +454,19 @@ static ModelData LoadModelFrom(TrinityArchive archive, List<string> rest, out st
 // All skeletal clips listed in the model folder's animation resource file (*.tracr).
 static void LoadClips(TrinityArchive archive, ModelData model, string folder, List<string> rest)
 {
-    string baseName = model.Name;
-    var tracr = archive.Read(folder + baseName + "_base.tracr");
-    if (tracr == null) { Console.Error.WriteLine("no animation resource file"); return; }
     int only = rest.IndexOf("--clip");
-    foreach (var file in TrinityAnimationReader.ClipNamesFromResource(tracr))
-    {
-        string clip = Path.GetFileNameWithoutExtension(file).Substring(baseName.Length + 1); // e.g. 00001_battlewait01_loop
-        if (only >= 0 && !clip.Contains(rest[only + 1])) continue;
-        var data = archive.Read(folder + file);
-        if (data == null) { Console.Error.WriteLine("missing clip " + file); continue; }
-        var anim = TrinityAnimationReader.Read(data, clip);
-        var traef = archive.Read(folder + Path.ChangeExtension(file, ".traef"));
-        if (traef != null) anim.Events = TrinityAnimationReader.ReadEvents(traef);
-        var tracm = archive.Read(folder + Path.ChangeExtension(file, ".tracm"));
-        if (tracm != null) TrinityCurveReader.Read(tracm, anim);
-        model.Animations.Add(anim);
-    }
+    SvExporter.LoadClips(model, file => archive.Read(folder + file), only >= 0 ? clip => clip.Contains(rest[only + 1]) : (Func<string, bool>)null);
     Console.Error.WriteLine($"{model.Animations.Count} clips");
-    // Meshes the battle idle (or default idle) keeps hidden are hidden by default.
-    var idle = model.Animations.FirstOrDefault(a => a.Name.Contains("battlewait")) ?? model.Animations.FirstOrDefault(a => a.Name.Contains("defaultwait"));
-    if (idle != null)
-        foreach (var v in idle.VisibilityTracks.Where(v => v.Fixed == false))
-            foreach (var mesh in model.Meshes.Where(m => m.Name == v.Mesh)) mesh.Hidden = true;
 }
 
-static SvCatalog.Entry FindEntry(SvCatalog catalog, List<string> rest)
+// National Dex number -> the game's model number (they differ for most of Gen 9) -> catalog entry.
+static SvCatalog.Entry FindEntry(SvCatalog catalog, TrinityArchive archive, List<string> rest)
 {
     int species = int.Parse(rest[1]);
     int form = rest.Count > 2 && int.TryParse(rest[2], out int f) ? f : 0;
     int gender = rest.Count > 3 && int.TryParse(rest[3], out int g) ? g : 0;
-    return catalog.Find(species, form, gender) ?? throw new InvalidOperationException($"#{species} is not in this game's catalog");
+    var personal = new SvPersonal(archive.Read(SvPersonal.Path));
+    return catalog.Find(personal.CatalogSpecies(species, form), form, gender) ?? throw new InvalidOperationException($"#{species} is not in this game's catalog");
 }
 
 // Every file of the model folder, from a hash list (--hashes <hashes_inside_fd.txt>), relative to the folder.

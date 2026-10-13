@@ -80,7 +80,7 @@ namespace PokeModelExporter.Formats
         public IEnumerable<ulong> AllFileHashes() => _fileHashes;
 
         public bool Contains(ulong fileHash) => _fileIndex.ContainsKey(fileHash);
-        public bool Contains(string path) => Contains(Hash(path));
+        public bool Contains(string path) => Contains(Hash(Normalize(path)));
 
         public string PackOf(ulong fileHash) => _fileIndex.TryGetValue(fileHash, out int i) ? _packNames[_filePack[i]] : null;
 
@@ -102,7 +102,22 @@ namespace PokeModelExporter.Formats
             return result;
         }
 
-        public byte[] Read(string path) => Read(Hash(path));
+        public byte[] Read(string path) => Read(Hash(Normalize(path)));
+
+        // Files are hashed by their canonical path, but materials of alternative models point at shared
+        // textures relatively ("pm0214/pm0214_01_00/../pm0214_00_00/x.bntx"): resolve "." and "..".
+        public static string Normalize(string path)
+        {
+            if (path.IndexOf("./", System.StringComparison.Ordinal) < 0) return path;
+            var parts = new System.Collections.Generic.List<string>();
+            foreach (var part in path.Split('/'))
+            {
+                if (part == ".") continue;
+                if (part == ".." && parts.Count > 0 && parts[parts.Count - 1] != "..") parts.RemoveAt(parts.Count - 1);
+                else parts.Add(part);
+            }
+            return string.Join("/", parts);
+        }
 
         // A file's decompressed bytes, or null if the game doesn't have it.
         public byte[] Read(ulong fileHash)

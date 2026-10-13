@@ -53,7 +53,7 @@ namespace PokeModelExporter.Scarlet
             var result = new Keys<Vector3> { Values = new Vector3[values.Length] };
             for (int i = 0; i < values.Length; i++) result.Values[i] = Vec3At(t.Buffer, values.StructAt(i, 12));
             result.Times = Times(t, type, values.Length);
-            return result;
+            return Increasing(result);
         }
 
         static Keys<Quaternion> RotationTrack(FbTable track, int typeField)
@@ -71,7 +71,7 @@ namespace PokeModelExporter.Scarlet
             var result = new Keys<Quaternion> { Values = new Quaternion[values.Length] };
             for (int i = 0; i < values.Length; i++) result.Values[i] = UnpackAt(t.Buffer, values.StructAt(i, 6));
             result.Times = Times(t, type, values.Length);
-            return result;
+            return Increasing(result);
         }
 
         static float[] Times(FbTable t, int type, int count)
@@ -86,6 +86,26 @@ namespace PokeModelExporter.Scarlet
             for (int i = 0; i < count && i < frames.Length; i++)
                 times[i] = type == 3 ? frames.U16(i) : frames.U8(i);
             return times;
+        }
+
+        // Framed tracks repeat their first and last frame (0,0,...,96,96); glTF needs strictly increasing
+        // times, so a key that doesn't move forward in time is dropped (the first one is kept).
+        static Keys<T> Increasing<T>(Keys<T> keys)
+        {
+            int n = 0;
+            for (int i = 0; i < keys.Times.Length; i++)
+            {
+                if (n > 0 && keys.Times[i] <= keys.Times[n - 1]) continue;
+                keys.Times[n] = keys.Times[i];
+                keys.Values[n] = keys.Values[i];
+                n++;
+            }
+            if (n < keys.Times.Length)
+            {
+                Array.Resize(ref keys.Times, n);
+                Array.Resize(ref keys.Values, n);
+            }
+            return keys;
         }
 
         static Keys<Vector3> Single(Vector3 v) => new Keys<Vector3> { Times = new[] { 0f }, Values = new[] { v } };

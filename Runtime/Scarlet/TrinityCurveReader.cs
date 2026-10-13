@@ -10,7 +10,7 @@ namespace PokeModelExporter.Scarlet
     //   Track { track_path (mesh shape name), _, _, _, material_animation, visibility_animation, blendshape_animation }
     // Material: per material, per parameter, per channel lists of (time, value).
     // Visibility: a bool union (Fixed / Dynamic / Framed16 / Framed8) per mesh. The bools of keyed tracks
-    // are bit-packed, 8 per byte (the header's visibility multiplier is 8): key i = bit i % 8 of byte i / 8.
+    // are bit-packed, 8 per byte (regardless of the header byte, which varies): key i = bit i % 8 of byte i / 8.
     // Braixen's special attack: tail hair [0, 22, 140] = 0b101 (hidden while the stick is out),
     // flame [0, 21, 140] = 0b010 (lit while it's raised).
     // Blend shapes: per shape, a float union (Fixed / Dynamic / Framed16 / Framed8).
@@ -86,16 +86,16 @@ namespace PokeModelExporter.Scarlet
             }
             else if (type >= 2 && type <= 4) // Dynamic { value } / Framed16, Framed8 { frames, value }
             {
+                // Values are always bit-packed, 8 per byte, low bit first (the header byte isn't a bit
+                // count: Braixen's clips have 8 there, Decidueye's 12, both packed the same way).
                 var packed = Bytes(t.Vector(type == 2 ? 0 : 1));
                 var frames = type == 2 ? default : t.Vector(0);
-                int count = type == 2 ? packed.Length * Math.Max(1, multiplier) : (frames.IsNull ? 0 : frames.Length);
+                int count = type == 2 ? Math.Min(packed.Length * 8, Math.Max(anim.FrameCount, 1)) : (frames.IsNull ? 0 : frames.Length);
                 track.Keys = new Keys<bool> { Times = new float[count], Values = new bool[count] };
                 for (int i = 0; i < count; i++)
                 {
                     track.Keys.Times[i] = type == 2 ? i : type == 3 ? frames.U16(i) : frames.U8(i);
-                    track.Keys.Values[i] = multiplier == 8
-                        ? i / 8 < packed.Length && ((packed[i / 8] >> (i % 8)) & 1) != 0
-                        : i < packed.Length && packed[i] != 0;
+                    track.Keys.Values[i] = i / 8 < packed.Length && ((packed[i / 8] >> (i % 8)) & 1) != 0;
                 }
             }
             else return;
