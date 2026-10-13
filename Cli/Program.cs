@@ -288,6 +288,27 @@ switch (rest[0])
         break;
     }
 
+    case "locators": // locators <national dex>: every effect-locator node (name, local parent, effect_node bone, transform)
+    {
+        var catalog = new SvCatalog(archive.Read(SvCatalog.Path));
+        var entry = FindEntry(catalog, archive, rest);
+        foreach (var file in entry.LocatorFiles())
+        {
+            var data = archive.Read(SvCatalog.DataRoot + entry.Folder + file);
+            Console.WriteLine($"{file}: {(data == null ? "missing" : "")}");
+            if (data == null) continue;
+            var nodes = FbTable.Root(data).Vector(1);
+            for (int i = 0; i < nodes.Length; i++)
+            {
+                var n = nodes.Table(i);
+                var t = n.Table(1);
+                int p = t.InlineStruct(2);
+                string pos = p == 0 ? "-" : $"{BitConverter.ToSingle(data, p):0.###} {BitConverter.ToSingle(data, p + 4):0.###} {BitConverter.ToSingle(data, p + 8):0.###}";
+                Console.WriteLine($"  {i,2} {n.String(0),-22} parent {n.I32(4, -1),2}  effect_node {n.String(6) ?? "-",-20} pos {pos}");
+            }
+        }
+        break;
+    }
     case "bones": // bones <national dex> [names...]: stored bone matrices vs. our computed bind pose
     {
         var catalog = new SvCatalog(archive.Read(SvCatalog.Path));
@@ -391,6 +412,14 @@ switch (rest[0])
         break;
     }
 
+    case "sceneobjects": // sceneobjects <move number>: the move's scene object tree (.trsot): objects and their components
+    {
+        string path = $"effect/battle_ew/ew{int.Parse(rest[1]):D4}/ew{int.Parse(rest[1]):D4}_0.trsot";
+        var data = archive.Read(path);
+        if (data == null) { Console.Error.WriteLine("not found: " + path); return 1; }
+        foreach (var line in SvSceneObjects.Describe(data)) Console.WriteLine(line);
+        break;
+    }
     case "timeline": // timeline <move number> [--all-conditions]: a move's effect timeline (effect/battle_ew/ew<move>/ew<move>.trtml)
     {
         string path = $"effect/battle_ew/ew{int.Parse(rest[1]):D4}/ew{int.Parse(rest[1]):D4}.trtml";
@@ -497,6 +526,13 @@ switch (rest[0])
                 else if (stem.EndsWith("_0", StringComparison.Ordinal)) scenes[stem.Substring(0, stem.Length - 2)] = data;
             }
             if (timelines.Count == 0) continue;
+            // Later hits of multi-hit moves (ew0024_2: Double Kick's second kick) have no scene objects of their own:
+            // they play the first hit's objects (73 timelines). _1.trsot files repeat the _0 ones.
+            if (scenes.Count > 0)
+            {
+                var first = scenes.OrderBy(k => k.Key, StringComparer.Ordinal).First().Value;
+                foreach (var stem in timelines.Keys) if (!scenes.ContainsKey(stem)) scenes[stem] = first;
+            }
             string json = SvMoveFx.Export(kv.Key, timelines, scenes, archive.Read, out int count,
                 (path, name, cx, cy) => { if (!textureSources.ContainsKey(name)) textureSources[name] = (path, cx, cy); },
                 (path, name, prim) => { if (!primitiveShapes.ContainsKey(name)) { var shape = FxPrimitiveShape.Analyze(prim); shape.Source = path; primitiveShapes[name] = shape; } });
@@ -533,7 +569,7 @@ switch (rest[0])
             try
             {
                 var tex = Bntx.Read(entry.bntx, at);
-                var shape = FxTextureShape.Analyze(FxTextureShape.Mask(tex.Rgba, tex.Width, tex.Height, tex.Format), tex.Width, tex.Height, t.Value.cx, t.Value.cy);
+                var shape = FxTextureShape.Analyze(FxTextureShape.Mask(Bntx.Mapped(tex), tex.Width, tex.Height, tex.Format), tex.Width, tex.Height, t.Value.cx, t.Value.cy);
                 shape.Source = t.Value.path;
                 tw.Name(t.Key);
                 shape.Write(tw);
@@ -560,7 +596,7 @@ switch (rest[0])
             {
                 var tex = Bntx.Read(bntx, i);
                 File.WriteAllBytes(Path.Combine(rest[2], name + ".png"), Png.Encode(tex.Rgba, tex.Width, tex.Height));
-                Console.WriteLine($"{name}: {tex.Width}x{tex.Height} format 0x{tex.Format:X4}");
+                Console.WriteLine($"{name}: {tex.Width}x{tex.Height} format 0x{tex.Format:X4} channels {string.Join(",", tex.Channels)}");
             }
             catch (Exception e) { Console.WriteLine($"{name}: {e.Message}"); }
         }
@@ -738,7 +774,7 @@ static void PrintEmitter(VfxbEmitter e, VfxbFile f, string indent)
     Console.WriteLine($"{indent}{e.Name}{(e.ParsedSize != e.BinarySize ? $"  !! parsed {e.ParsedSize} of {e.BinarySize} bytes" : "")}");
     Console.WriteLine($"{indent}  emit: {(e.OneTime ? "once" : "loop")} start {e.EmitStart} duration {e.EmitDuration} rate {e.Rate}±{e.RateRandom} interval {e.Interval}  life {e.Life}±{e.LifeRandom}{(e.InfiniteLife ? " infinite" : "")}  follow {e.FollowType}");
     Console.WriteLine($"{indent}  shape {e.VolumeType} radius {F(e.VolumeRadius)} sweep {e.SweepLongitude:0.##}  velocity all {e.AllDirection} dir {e.DirectionalScale}*{F(e.Direction)} diffusion {e.DiffusionAngle} random {e.VelocityRandom}  gravity {F(e.Gravity)} air {e.AirResistance}");
-    Console.WriteLine($"{indent}  draw: billboard {e.BillboardType} offset {e.OffsetType} blend {e.BlendType} combiner {e.ColorCombiner}/{e.AlphaCombiner} shader {e.ShaderType} soft {e.SoftParticle} flags {e.StaticFlags[0]:X8}  textures {string.Join(", ", tex)}{(e.PrimitiveId != ulong.MaxValue ? $"  primitive {e.PrimitiveId:X}" : "")}");
+    Console.WriteLine($"{indent}  draw: billboard {e.BillboardType} offset {e.OffsetType} blend {e.BlendType} combiner {e.ColorCombiner}/{e.AlphaCombiner} shader {e.ShaderType} soft {e.SoftParticle} flags {e.StaticFlags[0]:X8} inherit-flags path {e.InheritDrawPath} pre {e.PreDraw} a0f {e.InheritAlpha0EachFrame} a1f {e.InheritAlpha1EachFrame} own {e.EnableEmitterParticle} alphatest {e.AlphaTest} {e.AlphaFunc} {e.AlphaThreshold}  textures {string.Join(", ", tex)}{(e.PrimitiveId != ulong.MaxValue ? $"  primitive {e.PrimitiveId:X}" : "")}");
     Console.WriteLine($"{indent}  scale {F(e.ParticleScale)}±{F(e.ParticleScaleRandom)} keys {K(e.ScaleKeys)}  rotate init {F(e.RotateInit)}±{F(e.RotateInitRandom)} add {F(e.RotateAdd)}±{F(e.RotateAddRandom)}");
     Console.WriteLine($"{indent}  color0 [{e.Color0Type}] {F(e.Color0)} keys {K(e.Color0Keys)}  alpha0 [{e.Alpha0Type}] {e.Alpha0} keys {K(e.Alpha0Keys)}");
     Console.WriteLine($"{indent}  color1 [{e.Color1Type}] {F(e.Color1)} keys {K(e.Color1Keys)}  alpha1 [{e.Alpha1Type}] {e.Alpha1}  emitter color {F(e.EmitterColor0)} scale {F(e.Scale)} translate {F(e.Translate)}");

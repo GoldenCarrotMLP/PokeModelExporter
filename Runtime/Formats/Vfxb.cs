@@ -213,6 +213,9 @@ namespace PokeModelExporter.Formats
         // Inheritance (child emitters)
         public bool InheritVelocity, InheritScale, InheritRotate, InheritColor0, InheritColor1, InheritAlpha0, InheritAlpha1;
         public float InheritVelocityRate, InheritScaleRate;
+        // Drawing order and visibility around children: DrawPath, PreDraw (draw before the parent), alpha inherited each
+        // frame, and EnableEmitterParticle (EffectLibrary's name; whether this emitter draws its own particles).
+        public bool InheritDrawPath, PreDraw, InheritAlpha0EachFrame, InheritAlpha1EachFrame, EnableEmitterParticle;
 
         // Emission
         public bool OneTime, WorldGravity, EmitByDistance;
@@ -228,7 +231,7 @@ namespace PokeModelExporter.Formats
 
         // Render state
         public bool BlendEnabled, DepthTest, DepthWrite, AlphaTest;
-        public byte BlendType, DisplaySide;
+        public byte BlendType, DisplaySide, AlphaFunc;
         public float AlphaThreshold;
 
         // ParticleData
@@ -332,7 +335,8 @@ namespace PokeModelExporter.Formats
             // Inheritance
             e.InheritVelocity = r.U8() != 0; e.InheritScale = r.U8() != 0; e.InheritRotate = r.U8() != 0; r.U8();
             e.InheritColor0 = r.U8() != 0; e.InheritColor1 = r.U8() != 0; e.InheritAlpha0 = r.U8() != 0; e.InheritAlpha1 = r.U8() != 0;
-            r.Skip(8);
+            e.InheritDrawPath = r.U8() != 0; e.PreDraw = r.U8() != 0; e.InheritAlpha0EachFrame = r.U8() != 0; e.InheritAlpha1EachFrame = r.U8() != 0;
+            e.EnableEmitterParticle = r.U8() != 0; r.Skip(3);
             e.InheritVelocityRate = r.F32(); e.InheritScaleRate = r.F32();
 
             // Emission
@@ -353,7 +357,7 @@ namespace PokeModelExporter.Formats
 
             // Render state
             e.BlendEnabled = r.U8() != 0; e.DepthTest = r.U8() != 0; r.U8(); e.DepthWrite = r.U8() != 0;
-            e.AlphaTest = r.U8() != 0; r.U8(); e.BlendType = r.U8(); e.DisplaySide = r.U8();
+            e.AlphaTest = r.U8() != 0; e.AlphaFunc = r.U8(); e.BlendType = r.U8(); e.DisplaySide = r.U8();
             e.AlphaThreshold = r.F32(); r.Skip(4);
 
             // ParticleData

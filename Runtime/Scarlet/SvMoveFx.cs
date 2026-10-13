@@ -64,6 +64,7 @@ namespace PokeModelExporter.Scarlet
             {
                 var timeline = SvMoveTimeline.Read(kv.Value);
                 var objects = sceneObjects.TryGetValue(kv.Key, out var sot) ? SvSceneObjects.Read(sot) : new Dictionary<string, List<string>>();
+                var models = sot != null ? SvSceneObjects.Models(sot) : new Dictionary<string, string>();
                 w.BeginObject().Name("name").Value(kv.Key.Substring(6).TrimStart('_')).Name("frames").Value(timeline.Frames);
                 w.Name("objects").BeginArray();
                 foreach (var group in timeline.Groups)
@@ -90,6 +91,7 @@ namespace PokeModelExporter.Scarlet
                         }
                         w.EndArray();
                     }
+                    if (models.TryGetValue(group.Object, out var model)) w.Name("model").Value(model); // effect model (.trmdl)
                     w.Name("commands").BeginArray();
                     foreach (var c in commands)
                     {
@@ -210,6 +212,8 @@ namespace PokeModelExporter.Scarlet
                     .Name("rotate").Value(e.InheritRotate).Name("color0").Value(e.InheritColor0).Name("color1").Value(e.InheritColor1)
                     .Name("alpha0").Value(e.InheritAlpha0).Name("alpha1").Value(e.InheritAlpha1)
                     .Name("velocityRate").Raw(N(e.InheritVelocityRate)).Name("scaleRate").Raw(N(e.InheritScaleRate)).EndObject();
+                // On a child: whether its parent draws its own particles (Growl's "null" parents only spawn rings).
+                if (!e.EnableEmitterParticle) w.Name("showParent").Value(false);
             }
             // Emission (frames at 60 fps)
             w.Name("oneTime").Value(e.OneTime).Name("start").Value(e.EmitStart).Name("duration").Value(e.EmitDuration)
@@ -221,6 +225,10 @@ namespace PokeModelExporter.Scarlet
             if (e.InfiniteLife) w.Name("infiniteLife").Value(true);
             w.Name("follow").Value(e.FollowType); // 0 all (SRT), 1 none (world), 2 translation only
             if (e.FadeOnEmitEnd) w.Name("fadeOnStop").Value(true);
+            // Particle/Stop with Fade: emission stops (fadeOnStop) and, with these flags, alpha / scale go to 0 over
+            // alphaFadeTime frames instead of the particles living out their life.
+            if (e.AlphaFadeOnFade) w.Name("alphaFadeOnStop").Value(true);
+            if (e.ScaleFadeOnFade) w.Name("scaleFadeOnStop").Value(true);
             if (e.AlphaFadeTime != 0) w.Name("alphaFadeTime").Value(e.AlphaFadeTime);
             if (e.AlphaFadeIn) w.Name("alphaFadeIn").Value(e.FadeInTime);
             if (e.ScaleFadeIn) w.Name("scaleFadeIn").Value(e.FadeInTime);
@@ -258,6 +266,9 @@ namespace PokeModelExporter.Scarlet
             w.Name("billboard").Value(e.BillboardType).Name("pivot").Value(e.OffsetType).Name("blend").Value(e.BlendType);
             if (!e.DepthTest) w.Name("noDepthTest").Value(true);
             if (e.DisplaySide != 0) w.Name("side").Value(e.DisplaySide);
+            // Alpha test: the fragment programs discard pixels failing alpha <func> threshold, whatever the blend
+            // (screen-blended bubbles are shaped only by it). func: GL order, 4 = greater.
+            if (e.AlphaTest) w.Name("alphaTest").BeginArray().Value(e.AlphaFunc).Raw(N(e.AlphaThreshold)).EndArray();
             if (e.SortType != 0) w.Name("sort").Value(e.SortType);
             w.Name("colorCombiner").Value(e.ColorCombiner).Name("alphaCombiner").Value(e.AlphaCombiner);
             // Colour intensity: multiplies colour 0 and 1 (often far above 1: the game blooms them into white-hot light).

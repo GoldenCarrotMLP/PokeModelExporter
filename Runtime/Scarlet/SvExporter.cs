@@ -76,6 +76,7 @@ namespace PokeModelExporter.Scarlet
 
             var model = TrinityModelReader.Read(entry.ModelPath.Substring(entry.Folder.Length), read, shiny: options.Shiny, locatorFiles: entry.LocatorFiles());
             if (options.Animations) LoadClips(model, read, options.Clips, options.MainClipSetOnly);
+            if (options.Animations && options.MainClipSetOnly && model.Animations.Count > 0) KeepLocatorSet(model, model.Animations[0].Name[0]);
 
             var baked = SvMaterialBaker.Bake(model, read);
             Dictionary<string, byte[]> extra = null;
@@ -139,6 +140,29 @@ namespace PokeModelExporter.Scarlet
             if (idle != null)
                 foreach (var v in idle.VisibilityTracks.Where(v => v.Fixed == false))
                     foreach (var mesh in model.Meshes.Where(m => m.Name == v.Mesh)) mesh.Hidden = true;
+        }
+
+        // Locator sets match the clip sets (00000 standing, 10000 swimming, 20000 floating/flying): the same names at
+        // other heights (Charizard's eff_rangeattack01 is 0.69 m up standing, 1.32 m flying). With one clip set,
+        // keep only its locators so a name means one point.
+        static void KeepLocatorSet(ModelData model, char clipSet)
+        {
+            var sets = model.Nodes.Where(n => n.IsLocator).Select(n => n.LocatorSet).Distinct().ToList();
+            string keep = sets.FirstOrDefault(s => !string.IsNullOrEmpty(s) && s[0] == clipSet);
+            if (keep == null || sets.Count < 2) return;
+            int firstLocator = model.Nodes.FindIndex(n => n.IsLocator);
+            if (model.Nodes.Skip(firstLocator).Any(n => !n.IsLocator)) return; // locators are expected last
+            var map = new int[model.Nodes.Count];
+            var kept = new List<NodeData>();
+            for (int i = 0; i < model.Nodes.Count; i++)
+            {
+                var n = model.Nodes[i];
+                if (n.IsLocator && n.LocatorSet != keep) { map[i] = -1; continue; }
+                map[i] = kept.Count;
+                kept.Add(n);
+            }
+            foreach (var n in kept) if (n.Parent >= 0) n.Parent = map[n.Parent];
+            model.Nodes = kept;
         }
 
         // Clips come in sets by their number's first digit: 0xxxx standing, 1xxxx swimming, 2xxxx floating

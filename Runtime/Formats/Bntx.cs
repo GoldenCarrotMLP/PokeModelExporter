@@ -19,6 +19,8 @@ namespace PokeModelExporter.Formats
             public int Width, Height;
             public uint Format;
             public byte[] Rgba;
+            // Where the shader's R, G, B, A come from (BRTI 0x58): 0 zero, 1 one, 2 red, 3 green, 4 blue, 5 alpha.
+            public byte[] Channels;
         }
 
         // Number of textures (NX header 0x24) and each one's name (BRTI 0x60 -> u16 length + characters).
@@ -68,7 +70,22 @@ namespace PokeModelExporter.Formats
             byte[] rgba;
             if (bc != null) rgba = BcDecoder.Decode(linear, width, height, bc.Value, normalMap);
             else rgba = Uncompressed(linear, width, height, layout);
-            return new Texture { Width = width, Height = height, Format = format, Rgba = rgba };
+            var channels = new[] { file[brti + 0x58], file[brti + 0x59], file[brti + 0x5A], file[brti + 0x5B] };
+            return new Texture { Width = width, Height = height, Format = format, Rgba = rgba, Channels = channels };
+        }
+
+        // The texture as a shader samples it: each output channel from its source (Channels). Effect masks rely on
+        // it: BC4 masks are (R, R, R, R), two-channel BC5 ones (R, R, R, G) = a fill in red and the shape in green.
+        public static byte[] Mapped(Texture t)
+        {
+            var c = t.Channels;
+            if (c == null || (c[0] == 2 && c[1] == 3 && c[2] == 4 && c[3] == 5)) return t.Rgba;
+            var src = t.Rgba;
+            var dst = new byte[src.Length];
+            for (int i = 0; i < src.Length; i += 4)
+                for (int k = 0; k < 4; k++)
+                    dst[i + k] = c[k] switch { 0 => (byte)0, 1 => (byte)255, 2 => src[i], 3 => src[i + 1], 4 => src[i + 2], 5 => src[i + 3], _ => src[i + k] };
+            return dst;
         }
 
         static int BytesPerPixel(int layout) => layout switch
