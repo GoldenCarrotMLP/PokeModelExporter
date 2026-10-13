@@ -36,6 +36,9 @@ namespace PokeModelExporter.Formats
 
         public bool Has(int index) => Field(index) != 0;
 
+        // Absolute position of a field's inline data, or 0 when absent.
+        public int FieldPosition(int index) => Field(index);
+
         public ulong U64(int index, ulong fallback = 0) { int p = Field(index); return p == 0 ? fallback : BitConverter.ToUInt64(_buf, p); }
         public long I64(int index, long fallback = 0) { int p = Field(index); return p == 0 ? fallback : BitConverter.ToInt64(_buf, p); }
         public uint U32(int index, uint fallback = 0) { int p = Field(index); return p == 0 ? fallback : BitConverter.ToUInt32(_buf, p); }
@@ -91,6 +94,7 @@ namespace PokeModelExporter.Formats
 
         public int Length { get; }
         public bool IsNull => _buf == null;
+        public byte[] Buffer => _buf;
 
         public ulong U64(int i) => BitConverter.ToUInt64(_buf, _start + 8 * i);
         public uint U32(int i) => BitConverter.ToUInt32(_buf, _start + 4 * i);

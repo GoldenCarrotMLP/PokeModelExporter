@@ -20,7 +20,8 @@ namespace PokeModelExporter.Scarlet
     {
         // read(path relative to the model folder) -> bytes, or null when missing.
         // locatorFiles: effect-locator skeletons to attach (paths relative to the model folder).
-        public static ModelData Read(string trmdlName, Func<string, byte[]> read, bool shiny = false, bool lowestLodOnly = false,
+        // lod: which mesh file of the .trmdl (0 = full detail; see LodCount).
+        public static ModelData Read(string trmdlName, Func<string, byte[]> read, bool shiny = false, int lod = 0,
             IEnumerable<string> locatorFiles = null)
         {
             var model = new ModelData { Name = Path.GetFileNameWithoutExtension(trmdlName) };
@@ -51,15 +52,18 @@ namespace PokeModelExporter.Scarlet
 
             // Meshes: the first entry is the full-detail one; the rest are LODs.
             var meshes = mdl.Vector(1);
-            if (meshes.Length > 0)
+            if (lod >= 0 && lod < meshes.Length)
             {
-                string trmsh = meshes.Table(lowestLodOnly ? meshes.Length - 1 : 0).String(0);
+                string trmsh = meshes.Table(lod).String(0);
+                if (lod > 0) model.Name += "_lod" + lod;
                 var msh = FbTable.Root(Require(read, trmsh));
                 var mbf = FbTable.Root(Require(read, msh.String(2)));
                 ReadMeshes(msh, mbf, model);
             }
             return model;
         }
+
+        public static int LodCount(byte[] trmdl) => FbTable.Root(trmdl).Vector(1).Length;
 
         static byte[] Require(Func<string, byte[]> read, string name) =>
             read(name) ?? throw new FileNotFoundException("Missing model file " + name);

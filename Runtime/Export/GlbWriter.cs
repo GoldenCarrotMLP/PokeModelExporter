@@ -23,13 +23,16 @@ namespace PokeModelExporter.Export
 
         // textures: texture file name (as referenced by materials) -> PNG bytes; may be empty.
         // mapMaterial: how each material uses the textures (default: base color + normal map by name).
-        public static byte[] Write(ModelData model, IReadOnlyDictionary<string, byte[]> textures, Func<MaterialData, MaterialMapping> mapMaterial = null)
+        // extraImages: PNGs with no glTF role (e.g. subsurface masks, icons), kept as images with extras.role.
+        public static byte[] Write(ModelData model, IReadOnlyDictionary<string, byte[]> textures, Func<MaterialData, MaterialMapping> mapMaterial = null,
+            IReadOnlyDictionary<string, byte[]> extraImages = null)
         {
             var w = new GlbWriter();
-            return w.Build(model, textures, mapMaterial ?? MaterialMapping.Default);
+            return w.Build(model, textures, mapMaterial ?? MaterialMapping.Default, extraImages);
         }
 
-        byte[] Build(ModelData model, IReadOnlyDictionary<string, byte[]> textures, Func<MaterialData, MaterialMapping> mapMaterial)
+        byte[] Build(ModelData model, IReadOnlyDictionary<string, byte[]> textures, Func<MaterialData, MaterialMapping> mapMaterial,
+            IReadOnlyDictionary<string, byte[]> extraImages)
         {
             // ---- Images and textures ----
             var imageIndex = new Dictionary<string, int>();
@@ -41,6 +44,15 @@ namespace PokeModelExporter.Export
                 string imageName = System.IO.Path.GetFileNameWithoutExtension(kv.Key); // "pm0718_00_00_body_a_ao", not "...ao.bntx"
                 images.Add($"{{\"bufferView\":{view},\"mimeType\":\"image/png\",\"name\":{Str(imageName)}}}");
             }
+
+            int referencedImages = images.Count;
+            if (extraImages != null)
+                foreach (var kv in extraImages)
+                {
+                    if (imageIndex.ContainsKey(kv.Key)) continue;
+                    int view = AddView(kv.Value, target: 0);
+                    images.Add($"{{\"bufferView\":{view},\"mimeType\":\"image/png\",\"name\":{Str(System.IO.Path.GetFileNameWithoutExtension(kv.Key))},\"extras\":{{\"role\":\"unreferenced\",\"file\":{Str(kv.Key)}}}}}");
+                }
 
             // ---- Materials ----
             var materialIndex = new Dictionary<string, int>();
@@ -200,11 +212,11 @@ namespace PokeModelExporter.Export
             if (skin != null) j.Append($",\"skins\":[{skin}]");
             if (animations.Count > 0) j.Append($",\"animations\":[{string.Join(",", animations)}]");
             if (materials.Count > 0) j.Append($",\"materials\":[{string.Join(",", materials)}]");
-            if (images.Count > 0)
+            if (images.Count > 0) j.Append($",\"images\":[{string.Join(",", images)}]");
+            if (referencedImages > 0)
             {
-                j.Append($",\"images\":[{string.Join(",", images)}]");
                 var tex = new List<string>();
-                for (int i = 0; i < images.Count; i++) tex.Add($"{{\"source\":{i},\"sampler\":0}}");
+                for (int i = 0; i < referencedImages; i++) tex.Add($"{{\"source\":{i},\"sampler\":0}}");
                 j.Append($",\"textures\":[{string.Join(",", tex)}]");
                 j.Append(",\"samplers\":[{\"magFilter\":9729,\"minFilter\":9987,\"wrapS\":10497,\"wrapT\":10497}]");
             }

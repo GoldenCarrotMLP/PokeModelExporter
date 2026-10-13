@@ -122,6 +122,26 @@ namespace PokeModelExporter.Scarlet
             map.MetallicRoughnessTexture = name;
         }
 
+        // Every texture the given files reference or list that the GLB doesn't already use, as PNG
+        // (normal maps get Z rebuilt). files: texture file names relative to the model folder.
+        public static Dictionary<string, byte[]> ExtraTextures(IEnumerable<string> files, Func<string, byte[]> read, Result used)
+        {
+            var extra = new Dictionary<string, byte[]>();
+            foreach (var file in files)
+            {
+                if (file == null || extra.ContainsKey(file) || used.Textures.ContainsKey(file)) continue;
+                var bytes = read(file);
+                if (bytes == null) continue;
+                try
+                {
+                    var t = Bntx.Read(bytes, normalMap: file.Contains("_nrm"));
+                    extra[file] = Png.Encode(t.Rgba, t.Width, t.Height);
+                }
+                catch (Exception) { /* unsupported format: skip */ }
+            }
+            return extra;
+        }
+
         static bool HasHighlight(MaterialData m) =>
             m.ShaderOptions.TryGetValue("EnableHighlight", out var h) && h == "True" &&
             (m.Colors.ContainsKey("EmissionColorLayer5") || m.Colors.ContainsKey("BaseColorLayer5"));

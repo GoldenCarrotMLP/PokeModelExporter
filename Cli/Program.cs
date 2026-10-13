@@ -158,26 +158,70 @@ switch (rest[0])
         break;
     }
 
-    case "glb": // glb <national dex> [form] [gender] [--shiny] --out <file.glb>
+    case "glb": // glb <dex> [form] [gender] [--shiny] [--lods] [--no-anims] [--no-sidecar] [--hashes <list>] [--schemas <dir>] --out <file.glb>
     {
         int o = rest.IndexOf("--out");
-        string outFile = o >= 0 ? rest[o + 1] : "model.glb";
+        string outFile = Path.GetFullPath(o >= 0 ? rest[o + 1] : "model.glb");
+        var catalog = new SvCatalog(archive.Read(SvCatalog.Path));
+        var entry = FindEntry(catalog, rest);
         var model = LoadModelFrom(archive, rest, out string folder);
-        // Textures: plain maps decoded, layered materials (eyes, flames...) baked to color/emission.
         string dir = folder;
+        Func<string, byte[]> read = file => archive.Read(dir + file);
         if (!rest.Contains("--no-anims")) LoadClips(archive, model, dir, rest);
-        var baked = SvMaterialBaker.Bake(model, file => archive.Read(dir + file));
+        var folderFiles = FolderFiles(rest, folder);
+
+        // Textures: plain maps decoded, layered materials (eyes, flames...) baked to color/emission;
+        // everything else the materials, icons or folder hold kept as unreferenced images.
+        var baked = SvMaterialBaker.Bake(model, read);
+        var extraNames = new List<string>();
+        foreach (var mtr in new[] { "", "_rare", "_edit" }.Select(x => model.Name + x + ".trmtr"))
+        {
+            var data = read(mtr);
+            if (data == null) continue;
+            var mats = FbTable.Root(data).Vector(1);
+            for (int i = 0; i < mats.Length; i++) { var tx = mats.Table(i).Vector(2); for (int k = 0; k < tx.Length; k++) extraNames.Add(tx.Table(k).String(1)); }
+        }
+        extraNames.Add(Path.GetFileName(entry.IconPath));
+        extraNames.Add(Path.GetFileNameWithoutExtension(entry.IconPath) + "_big.bntx");
+        if (folderFiles != null) extraNames.AddRange(folderFiles.Where(f => f.EndsWith(".bntx")));
+        var extra = SvMaterialBaker.ExtraTextures(extraNames, read, baked);
+
         int dump = rest.IndexOf("--dump-textures");
         if (dump >= 0)
         {
             Directory.CreateDirectory(rest[dump + 1]);
-            foreach (var kv in baked.Textures) File.WriteAllBytes(Path.Combine(rest[dump + 1], kv.Key.Replace(".bntx", ".png")), kv.Value);
+            foreach (var kv in baked.Textures.Concat(extra)) File.WriteAllBytes(Path.Combine(rest[dump + 1], kv.Key.Replace(".bntx", ".png").Replace('/', '_')), kv.Value);
             foreach (var kv in baked.Mappings) Console.WriteLine($"  {kv.Key}: color={kv.Value.BaseColorTexture} emission={kv.Value.EmissiveTexture} unlit={kv.Value.Unlit}");
         }
-        var glb = GlbWriter.Write(model, baked.Textures, m => baked.Mappings[m.Name]);
-        Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(outFile)));
+        var glb = GlbWriter.Write(model, baked.Textures, m => baked.Mappings[m.Name], extra);
+        Directory.CreateDirectory(Path.GetDirectoryName(outFile));
         File.WriteAllBytes(outFile, glb);
-        Console.WriteLine($"{glb.Length} bytes -> {outFile}");
+        Console.WriteLine($"{glb.Length} bytes -> {outFile}  ({extra.Count} extra images)");
+
+        // Lower-detail meshes, only on request: same skeleton and materials, no clips.
+        if (rest.Contains("--lods"))
+        {
+            int lods = TrinityModelReader.LodCount(archive.Read(SvCatalog.DataRoot + entry.ModelPath));
+            for (int lod = 1; lod < lods; lod++)
+            {
+                var lodModel = TrinityModelReader.Read(Path.GetFileName(entry.ModelPath), read, shiny: rest.Contains("--shiny"), lod: lod, locatorFiles: entry.LocatorFiles());
+                var lodBaked = SvMaterialBaker.Bake(lodModel, read);
+                string lodFile = Path.Combine(Path.GetDirectoryName(outFile), Path.GetFileNameWithoutExtension(outFile) + $"_lod{lod}.glb");
+                var lodGlb = GlbWriter.Write(lodModel, lodBaked.Textures, m => lodBaked.Mappings[m.Name]);
+                File.WriteAllBytes(lodFile, lodGlb);
+                Console.WriteLine($"{lodGlb.Length} bytes -> {lodFile}");
+            }
+        }
+
+        // Sidecar: what glTF can't hold.
+        if (!rest.Contains("--no-sidecar"))
+        {
+            var schemas = new SchemaCache(rest);
+            string json = SvSidecar.Build(entry, "scarlet-violet", read, schemas.Get, folderFiles);
+            string sidecar = Path.ChangeExtension(outFile, ".json");
+            File.WriteAllText(sidecar, json);
+            Console.WriteLine($"{json.Length} chars -> {sidecar}");
+        }
         break;
     }
 
@@ -388,4 +432,66 @@ static void LoadClips(TrinityArchive archive, ModelData model, string folder, Li
     if (idle != null)
         foreach (var v in idle.VisibilityTracks.Where(v => v.Fixed == false))
             foreach (var mesh in model.Meshes.Where(m => m.Name == v.Mesh)) mesh.Hidden = true;
+}
+
+static SvCatalog.Entry FindEntry(SvCatalog catalog, List<string> rest)
+{
+    int species = int.Parse(rest[1]);
+    int form = rest.Count > 2 && int.TryParse(rest[2], out int f) ? f : 0;
+    int gender = rest.Count > 3 && int.TryParse(rest[3], out int g) ? g : 0;
+    return catalog.Find(species, form, gender) ?? throw new InvalidOperationException($"#{species} is not in this game's catalog");
+}
+
+// Every file of the model folder, from a hash list (--hashes <hashes_inside_fd.txt>), relative to the folder.
+static List<string> FolderFiles(List<string> rest, string folder)
+{
+    int h = rest.IndexOf("--hashes");
+    if (h < 0) return null;
+    return File.ReadLines(rest[h + 1]).Select(l => l.Length > 19 ? l.Substring(19) : "")
+        .Where(f => f.StartsWith(folder)).Select(f => f.Substring(folder.Length)).OrderBy(f => f).ToList();
+}
+
+// PokeDocs schemas (no license; not bundled): read from --schemas <dir> (a PokeDocs SV/Flatbuffers folder),
+// else downloaded once from GitHub into %LOCALAPPDATA%/PokeModelExporter/schemas/SV.
+sealed class SchemaCache
+{
+    const string Base = "https://raw.githubusercontent.com/pkZukan/PokeDocs/HEAD/SV/Flatbuffers/";
+    readonly string _dir;
+    readonly bool _download;
+    readonly Dictionary<string, FbsSchema> _parsed = new Dictionary<string, FbsSchema>();
+
+    public SchemaCache(List<string> rest)
+    {
+        int s = rest.IndexOf("--schemas");
+        _download = s < 0;
+        _dir = s >= 0 ? rest[s + 1] : Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "PokeModelExporter", "schemas", "SV");
+    }
+
+    public FbsSchema Get(string extension)
+    {
+        if (_parsed.TryGetValue(extension, out var cached)) return cached;
+        FbsSchema schema = null;
+        if (SvSidecar.SchemaPaths.TryGetValue(extension, out var rel))
+        {
+            string file = Path.Combine(_dir, rel.Replace('/', Path.DirectorySeparatorChar));
+            if (!File.Exists(file) && _download)
+            {
+                try
+                {
+                    using var http = new System.Net.Http.HttpClient();
+                    http.DefaultRequestHeaders.UserAgent.ParseAdd("PokeModelExporter");
+                    var text = http.GetStringAsync(Base + rel).GetAwaiter().GetResult();
+                    Directory.CreateDirectory(Path.GetDirectoryName(file));
+                    File.WriteAllText(file, text);
+                }
+                catch (Exception e) { Console.Error.WriteLine($"schema {rel}: {e.Message}"); }
+            }
+            if (File.Exists(file))
+            {
+                try { schema = FbsSchema.Parse(File.ReadAllText(file)); }
+                catch (Exception e) { Console.Error.WriteLine($"schema {rel}: {e.Message}"); }
+            }
+        }
+        return _parsed[extension] = schema;
+    }
 }
