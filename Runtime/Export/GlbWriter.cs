@@ -138,10 +138,25 @@ namespace PokeModelExporter.Export
             }
 
             // ---- Meshes ----
+            // Inverted-hull outlines (a slightly bigger shell with every triangle facing inwards: Rotom's blue
+            // firemask) must be single-sided, so only the far side shows round the silhouette; their material may be
+            // double-sided for other meshes (Unlit sheets), so they get a single-sided copy of it.
+            var singleSided = new Dictionary<int, int>();
+            int SingleSided(int index)
+            {
+                if (!materials[index].Contains("\"doubleSided\":true")) return index;
+                if (!singleSided.TryGetValue(index, out int copy))
+                {
+                    singleSided[index] = copy = materials.Count;
+                    materials.Add(materials[index].Replace(",\"doubleSided\":true", "").Replace("\"name\":\"", "\"name\":\"hull "));
+                }
+                return copy;
+            }
             var meshes = new List<string>();
             foreach (var mesh in model.Meshes)
             {
                 if (mesh.Positions == null) continue;
+                bool hull = IsInvertedHull(mesh);
                 int count = mesh.Positions.Length;
                 var attrs = new List<string> { $"\"POSITION\":{AddVec3(mesh.Positions, minMax: true)}" };
                 if (mesh.Normals != null) attrs.Add($"\"NORMAL\":{AddVec3(mesh.Normals)}");
@@ -166,7 +181,7 @@ namespace PokeModelExporter.Export
                     var idx = new byte[sub.Indices.Length * 4];
                     for (int i = 0; i < sub.Indices.Length; i++) BitConverter.GetBytes((uint)sub.Indices[i]).CopyTo(idx, i * 4);
                     int ia = AddAccessor(idx, "SCALAR", 5125, sub.Indices.Length, target: 34963);
-                    string material = materialIndex.TryGetValue(sub.Material ?? "", out int mi) ? $",\"material\":{mi}" : "";
+                    string material = materialIndex.TryGetValue(sub.Material ?? "", out int mi) ? $",\"material\":{(hull ? SingleSided(mi) : mi)}" : "";
                     prims.Add($"{{\"attributes\":{attributes},\"indices\":{ia}{material}}}");
                 }
                 int meshIndex = meshes.Count;
@@ -318,6 +333,24 @@ namespace PokeModelExporter.Export
         {
             float[] v = { m.M11, m.M12, m.M13, m.M14, m.M21, m.M22, m.M23, m.M24, m.M31, m.M32, m.M33, m.M34, m.M41, m.M42, m.M43, m.M44 };
             Array.Copy(v, 0, dst, at, 16);
+        }
+
+        // A closed shell whose triangles (nearly) all face its middle: an inverted-hull outline.
+        static bool IsInvertedHull(MeshData mesh)
+        {
+            var c = Vector3.Zero;
+            foreach (var p in mesh.Positions) c += p;
+            c /= mesh.Positions.Length;
+            int inward = 0, total = 0;
+            foreach (var sub in mesh.SubMeshes)
+                for (int t = 0; t + 2 < sub.Indices.Length; t += 3)
+                {
+                    Vector3 a = mesh.Positions[sub.Indices[t]], b = mesh.Positions[sub.Indices[t + 1]], d = mesh.Positions[sub.Indices[t + 2]];
+                    var normal = Vector3.Cross(b - a, d - a);
+                    if (Vector3.Dot(normal, (a + b + d) / 3 - c) < 0) inward++;
+                    total++;
+                }
+            return total >= 20 && inward >= total * 0.95f;
         }
 
         internal static Matrix4x4[] WorldMatrices(ModelData model)

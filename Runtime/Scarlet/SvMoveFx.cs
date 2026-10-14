@@ -58,8 +58,12 @@ namespace PokeModelExporter.Scarlet
         // readParticles: archive path -> bytes (null when missing).
         public static string Export(int move, IReadOnlyDictionary<string, byte[]> timelines, IReadOnlyDictionary<string, byte[]> sceneObjects,
             Func<string, byte[]> readParticles, out int emitterCount, Action<string, string, int, int> onTexture = null,
-            Action<string, string, BfresPrimitives.Primitive> onPrimitive = null)
+            Action<string, string, BfresPrimitives.Primitive> onPrimitive = null, string folder = null)
         {
+            // The effect's folder and file stem: a move's (effect/battle_ew/ew0085) or a battle system effect's
+            // (effect/battle_es/es008: stat up, heal...).
+            folder ??= $"effect/battle_ew/ew{move:D4}";
+            string stem = folder.Substring(folder.LastIndexOf('/') + 1);
             var w = new JsonWriter(indent: false);
             var effects = new SortedDictionary<string, string>(StringComparer.Ordinal); // effect name -> archive path
             w.BeginObject().Name("version").Value(1).Name("move").Value(move).Name("fps").Value(60);
@@ -73,7 +77,7 @@ namespace PokeModelExporter.Scarlet
                 // (Transform's start_charge / end_impact around the model swap).
                 foreach (var paths in objects.Values)
                     foreach (var path in paths) effects[System.IO.Path.GetFileNameWithoutExtension(path)] = path;
-                w.BeginObject().Name("name").Value(kv.Key.Substring(6).TrimStart('_')).Name("frames").Value(timeline.Frames);
+                w.BeginObject().Name("name").Value(kv.Key.Substring(stem.Length).TrimStart('_')).Name("frames").Value(timeline.Frames);
                 w.Name("objects").BeginArray();
                 foreach (var group in timeline.Groups)
                 {
@@ -122,7 +126,7 @@ namespace PokeModelExporter.Scarlet
                 // is in the move's own folder.
                 string path = kv.Value;
                 var data = readParticles(path);
-                if (data == null) data = readParticles(path = $"effect/battle_ew/ew{move:D4}/{System.IO.Path.GetFileName(kv.Value)}");
+                if (data == null) data = readParticles(path = $"{folder}/{System.IO.Path.GetFileName(kv.Value)}");
                 if (data == null) continue;
                 var file = VfxbFile.Read(data);
                 w.Name(kv.Key).BeginArray();

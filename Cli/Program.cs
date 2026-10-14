@@ -514,8 +514,10 @@ switch (rest[0])
         {
             string path = line.Substring(line.IndexOf(' ') + 1);
             var m = System.Text.RegularExpressions.Regex.Match(path, @"^effect/battle_ew/ew(\d{4})/(ew\d{4}(?:_\d+|_[a-z][a-z0-9_]*)?)\.(trtml|trsot)$|^effect/battle_ew/ew(\d{4})/(ew\d{4}(?:_\d+)?)_0\.trsot$");
-            if (!m.Success) continue;
-            int move = int.Parse(m.Groups[1].Success ? m.Groups[1].Value : m.Groups[4].Value);
+            // The battle's system effects (stat up / down, heal, statuses, Substitute...): es001.. as -1, -2... (es<n>.json).
+            var es = System.Text.RegularExpressions.Regex.Match(path, @"^effect/battle_es/es(\d{3})/es\d{3}(?:_0)?\.(trtml|trsot)$");
+            if (!m.Success && !es.Success) continue;
+            int move = es.Success ? -int.Parse(es.Groups[1].Value) : int.Parse(m.Groups[1].Success ? m.Groups[1].Value : m.Groups[4].Value);
             if (only.Count > 0 && !only.Contains(move)) continue;
             if (!byMove.TryGetValue(move, out var list)) byMove[move] = list = new List<string>();
             list.Add(path);
@@ -545,10 +547,12 @@ switch (rest[0])
                 var first = scenes.OrderBy(k => k.Key, StringComparer.Ordinal).First().Value;
                 foreach (var stem in timelines.Keys) if (!scenes.ContainsKey(stem)) scenes[stem] = first;
             }
+            string folder = kv.Key < 0 ? $"effect/battle_es/es{-kv.Key:D3}" : null;
             string json = SvMoveFx.Export(kv.Key, timelines, scenes, archive.Read, out int count,
                 (path, name, cx, cy) => { if (!textureSources.ContainsKey(name)) textureSources[name] = (path, cx, cy); },
-                (path, name, prim) => { if (!primitiveShapes.ContainsKey(name)) { var shape = FxPrimitiveShape.Analyze(prim); shape.Source = path; primitiveShapes[name] = shape; } });
-            string file = Path.Combine(outDir, $"{kv.Key:D4}.json");
+                (path, name, prim) => { if (!primitiveShapes.ContainsKey(name)) { var shape = FxPrimitiveShape.Analyze(prim); shape.Source = path; primitiveShapes[name] = shape; } },
+                folder);
+            string file = Path.Combine(outDir, kv.Key < 0 ? $"es{-kv.Key:D3}.json" : $"{kv.Key:D4}.json");
             File.WriteAllText(file, json);
             total += json.Length; files++; emitters += count;
         }
