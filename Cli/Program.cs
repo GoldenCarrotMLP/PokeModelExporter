@@ -815,7 +815,7 @@ static void PrintEmitter(VfxbEmitter e, VfxbFile f, string indent)
         if (e.Samplers[i].Used)
         {
             var sc = e.Scrolls[i];
-            Console.WriteLine($"{indent}  tex{i} scroll: add {F(sc.ScrollAdd)} start {F(sc.Scroll)} rnd {F(sc.ScrollRandom)} scaleAdd {F(sc.ScaleAdd)} scale {F(sc.Scale)} scaleRnd {F(sc.ScaleRandom)} rot {sc.RotationAdd} {sc.Rotation} {sc.RotationRandom} {sc.RotationType} div {F(sc.UVDivisions)} base {F(sc.Unused)}  pattern {e.Patterns[i].Count}/{e.Patterns[i].Frequency} repeat {e.TextureAnims[i].Repeat} wrap {e.Samplers[i].WrapU}/{e.Samplers[i].WrapV}");
+            Console.WriteLine($"{indent}  tex{i} scroll: add {F(sc.ScrollAdd)} start {F(sc.Scroll)} rnd {F(sc.ScrollRandom)} scaleAdd {F(sc.ScaleAdd)} scale {F(sc.Scale)} scaleRnd {F(sc.ScaleRandom)} rot {sc.RotationAdd} {sc.Rotation} {sc.RotationRandom} {sc.RotationType} div {F(sc.UVDivisions)} base {F(sc.Unused)}  pattern {e.Patterns[i].Count}/{e.Patterns[i].Frequency} repeat {e.TextureAnims[i].Repeat} anim scroll/rotate/scale {(e.TextureAnims[i].Scroll ? 1 : 0)}/{(e.TextureAnims[i].Rotate ? 1 : 0)}/{(e.TextureAnims[i].Scale ? 1 : 0)} wrap {e.Samplers[i].WrapU}/{e.Samplers[i].WrapV}");
         }
     foreach (var c in e.Children) PrintEmitter(c, f, indent + "    ");
 }

@@ -180,12 +180,16 @@ namespace PokeModelExporter.Scarlet
                 // are); some relative to their joint (Trick's cup sits at the origin while its joint rests 0.75 aside).
                 // Those are moved into model space first, so the bind-pose skinning puts both in the right place.
                 // A joint resting far from scale 1 always holds its meshes relative to it: Shell Smash's shell rests at
-                // 0.01 and grows to 1, and a model-space mesh would grow 100 times with it.
+                // 0.01 and grows to 1, and a model-space mesh would grow 100 times with it. Otherwise the reading that
+                // puts the mesh nearer its own joint wins: Celebrate's lid (0.9 m up, its joint 3 m up) sits on top of
+                // the box only as joint-relative, the box's sides (3-4 m up around their joints) only as model space.
                 var bind = world[model.Nodes.IndexOf(node)];
                 var centre = Centre(mesh.Positions);
                 float scale = System.Numerics.Vector3.TransformNormal(System.Numerics.Vector3.UnitX, bind).Length();
+                float asModel = System.Numerics.Vector3.Distance(centre, bind.Translation);
+                float asJoint = System.Numerics.Vector3.Distance(System.Numerics.Vector3.Transform(centre, bind), bind.Translation);
                 if (scale < 0.5f || scale > 2f
-                    || bind.Translation.Length() > 0.05f && centre.Length() < 0.3f * bind.Translation.Length())
+                    || bind.Translation.Length() > 0.05f && asJoint < 0.5f * asModel)
                 {
                     for (int i = 0; i < mesh.Positions.Length; i++) mesh.Positions[i] = System.Numerics.Vector3.Transform(mesh.Positions[i], bind);
                     if (mesh.Normals != null)

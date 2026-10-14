@@ -310,7 +310,8 @@ namespace PokeModelExporter.Scarlet
                 w.Name("param").BeginArray().Raw(N(e.ParamKeys[0].X)).Raw(N(e.ParamKeys[0].Y)).Raw(N(e.ParamKeys[0].Z)).EndArray();
             if (e.ShaderType != 0) w.Name("shaderType").Value(e.ShaderType);
             // Shader type 2 distorts texture 1 by texture 0 (strength per u, v; times the param curve's X).
-            if (e.ShaderType == 2) w.Name("distortion").BeginArray().Raw(N(e.DistortionStrength[0])).Raw(N(e.DistortionStrength[1])).EndArray();
+            // Blend 5 refracts the scene behind by texture 0 with the same strengths (compiled fragment programs).
+            if (e.ShaderType == 2 || e.BlendType == 5) w.Name("distortion").BeginArray().Raw(N(e.DistortionStrength[0])).Raw(N(e.DistortionStrength[1])).EndArray();
             if (e.SoftParticle) w.Name("soft").Value(true);
             // Primitive meshes by model name (shapes in primitives.json).
             if (e.PrimitiveId != ulong.MaxValue)
@@ -350,14 +351,23 @@ namespace PokeModelExporter.Scarlet
                     }
                 }
                 if (anim.Repeat != 0) w.Name("repeat").Value(anim.Repeat);
+                // The texture's UV animation switches (scroll, rotate, scale): with any of them on, the game compiles
+                // the emitter's shader with the full UV transform and uses every value (Whirlwind's windroll scrolls
+                // with only "scale" on); with all three off it compiles the static path (the plain quad corner times
+                // the repeat) and the scroll / rotation / scale values are never used (Grassy Terrain's circles carry
+                // a scroll and rotation random they don't show).
+                bool animated = anim.Scroll || anim.Rotate || anim.Scale;
                 FloatsIf(w, "uvScale", sc.Scale, 1);
-                FloatsIf(w, "uvScaleAdd", sc.ScaleAdd, 0);
-                FloatsIf(w, "uvScaleRandom", sc.ScaleRandom, 0);
-                FloatsIf(w, "scrollAdd", sc.ScrollAdd, 0);
-                FloatsIf(w, "scroll", sc.Scroll, 0);
-                FloatsIf(w, "scrollRandom", sc.ScrollRandom, 0);
-                if (sc.RotationAdd != 0 || sc.Rotation != 0 || sc.RotationRandom != 0)
-                    w.Name("uvRotateAdd").Raw(N(sc.RotationAdd)).Name("uvRotate").Raw(N(sc.Rotation)).Name("uvRotateRandom").Raw(N(sc.RotationRandom));
+                if (animated)
+                {
+                    FloatsIf(w, "uvScaleAdd", sc.ScaleAdd, 0);
+                    FloatsIf(w, "uvScaleRandom", sc.ScaleRandom, 0);
+                    FloatsIf(w, "scrollAdd", sc.ScrollAdd, 0);
+                    FloatsIf(w, "scroll", sc.Scroll, 0);
+                    FloatsIf(w, "scrollRandom", sc.ScrollRandom, 0);
+                    if (sc.RotationAdd != 0 || sc.Rotation != 0 || sc.RotationRandom != 0)
+                        w.Name("uvRotateAdd").Raw(N(sc.RotationAdd)).Name("uvRotate").Raw(N(sc.Rotation)).Name("uvRotateRandom").Raw(N(sc.RotationRandom));
+                }
                 if (anim.InvertRandomU || anim.InvertRandomV) w.Name("flipRandom").BeginArray().Value(anim.InvertRandomU).Value(anim.InvertRandomV).EndArray();
                 w.EndObject();
             }
