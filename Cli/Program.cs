@@ -517,11 +517,16 @@ switch (rest[0])
             // The battle's system effects (stat up / down, heal, statuses, Substitute...): es001.. as -1, -2... (es<n>.json).
             // The five statuses (es001-005) keep their scene objects and particles in effect/field/status/es<n>/.
             var es = System.Text.RegularExpressions.Regex.Match(path, @"^effect/(?:battle_es|field/status)/es(\d{3})/es\d{3}(?:_0)?\.(trtml|trsot)$");
-            // Battle events the stage plays: entry hazards hurting a Pokemon as it comes in (ee040 Spikes, ee041 Toxic
+            // Battle events the stage plays: terrains starting (ee050 Grassy, ee051 Misty, ee052 Electric, ee053 Psychic) and
+            // entry hazards hurting a Pokemon as it comes in (ee040 Spikes, ee041 Toxic
             // Spikes, ee042 Stealth Rock), as -1040.. (ee<n>.json).
-            var ee = System.Text.RegularExpressions.Regex.Match(path, @"^effect/battle_ee/ee(04[0-2])/ee\d{3}(?:_0)?\.(trtml|trsot)$");
-            if (!m.Success && !es.Success && !ee.Success) continue;
+            var ee = System.Text.RegularExpressions.Regex.Match(path, @"^effect/battle_ee/ee(04[0-2]|05[0-3])/ee\d{3}(?:_0)?\.(trtml|trsot)$");
+            // Weather on the field (etb001 rain, etb002 snow, etb003 sandstorm, etb004 sun), as -2001.. (etb<n>.json):
+            // looping particles and an ambient sound, no timeline.
+            var etb = System.Text.RegularExpressions.Regex.Match(path, @"^effect/battle_etb/etb(\d{3})/etb\d{3}_0\.trsot$");
+            if (!m.Success && !es.Success && !ee.Success && !etb.Success) continue;
             int move = es.Success ? -int.Parse(es.Groups[1].Value) : ee.Success ? -1000 - int.Parse(ee.Groups[1].Value)
+                : etb.Success ? -2000 - int.Parse(etb.Groups[1].Value)
                 : int.Parse(m.Groups[1].Success ? m.Groups[1].Value : m.Groups[4].Value);
             if (only.Count > 0 && !only.Contains(move)) continue;
             if (!byMove.TryGetValue(move, out var list)) byMove[move] = list = new List<string>();
@@ -544,7 +549,7 @@ switch (rest[0])
                 if (path.EndsWith(".trtml", StringComparison.Ordinal)) timelines[stem] = data;
                 else if (stem.EndsWith("_0", StringComparison.Ordinal)) scenes[stem.Substring(0, stem.Length - 2)] = data;
             }
-            if (timelines.Count == 0) continue;
+            if (timelines.Count == 0 && kv.Key > -2000) continue;
             // Later hits of multi-hit moves (ew0024_2: Double Kick's second kick) have no scene objects of their own:
             // they play the first hit's objects (73 timelines). _1.trsot files repeat the _0 ones.
             if (scenes.Count > 0)
@@ -552,12 +557,14 @@ switch (rest[0])
                 var first = scenes.OrderBy(k => k.Key, StringComparer.Ordinal).First().Value;
                 foreach (var stem in timelines.Keys) if (!scenes.ContainsKey(stem)) scenes[stem] = first;
             }
-            string folder = kv.Key <= -1000 ? $"effect/battle_ee/ee{-1000 - kv.Key:D3}" : kv.Key < 0 ? $"effect/battle_es/es{-kv.Key:D3}" : null;
+            string folder = kv.Key <= -2000 ? $"effect/battle_etb/etb{-2000 - kv.Key:D3}"
+                : kv.Key <= -1000 ? $"effect/battle_ee/ee{-1000 - kv.Key:D3}" : kv.Key < 0 ? $"effect/battle_es/es{-kv.Key:D3}" : null;
             string json = SvMoveFx.Export(kv.Key, timelines, scenes, archive.Read, out int count,
                 (path, name, cx, cy) => { if (!textureSources.ContainsKey(name)) textureSources[name] = (path, cx, cy); },
                 (path, name, prim) => { if (!primitiveShapes.ContainsKey(name)) { var shape = FxPrimitiveShape.Analyze(prim); shape.Source = path; primitiveShapes[name] = shape; } },
                 folder);
-            string file = Path.Combine(outDir, kv.Key <= -1000 ? $"ee{-1000 - kv.Key:D3}.json" : kv.Key < 0 ? $"es{-kv.Key:D3}.json" : $"{kv.Key:D4}.json");
+            string file = Path.Combine(outDir, kv.Key <= -2000 ? $"etb{-2000 - kv.Key:D3}.json"
+                : kv.Key <= -1000 ? $"ee{-1000 - kv.Key:D3}.json" : kv.Key < 0 ? $"es{-kv.Key:D3}.json" : $"{kv.Key:D4}.json");
             File.WriteAllText(file, json);
             total += json.Length; files++; emitters += count;
         }

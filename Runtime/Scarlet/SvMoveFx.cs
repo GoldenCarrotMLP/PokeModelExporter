@@ -51,7 +51,7 @@ namespace PokeModelExporter.Scarlet
             type.StartsWith("Model/", StringComparison.Ordinal) ||
             type == "Title/Battle/GaugeDamage" || type == "Title/Battle/AttackMotion" || type == "Title/Battle/CameraShake" ||
             type == "Title/Battle/CameraShakeFade" || type == "Title/Battle/AdjustScale" || type == "Title/Battle/AdjustScaleTarget" ||
-            type == "Title/Battle/ResetPosition" || type == "Title/Battle/MigawariVisible" || type == "Title/Battle/TameVisible" ||
+            type == "Title/Battle/ResetPosition" || type == "Title/Battle/SetCenterPosition" || type == "Title/Battle/MigawariVisible" || type == "Title/Battle/TameVisible" ||
             type == "Animation/SetTrigger" || type == "Animation/SetInt" || type == "Animation/SetMasterSpeed";
 
         // timelines: file stem ("ew0085", "ew0024_1") -> .trtml bytes; sceneObjects: stem -> .trsot bytes (may lack some);
@@ -68,6 +68,11 @@ namespace PokeModelExporter.Scarlet
             var effects = new SortedDictionary<string, string>(StringComparer.Ordinal); // effect name -> archive path
             w.BeginObject().Name("version").Value(1).Name("move").Value(move).Name("fps").Value(60);
             w.Name("variants").BeginArray();
+            // Effects without a timeline (the field's weather): the game starts every effect of the scene from code.
+            if (timelines.Count == 0)
+                foreach (var sot in sceneObjects.Values)
+                    foreach (var paths in SvSceneObjects.Read(sot).Values)
+                        foreach (var path in paths) effects[System.IO.Path.GetFileNameWithoutExtension(path)] = path;
             foreach (var kv in timelines.OrderBy(k => k.Key, StringComparer.Ordinal))
             {
                 var timeline = SvMoveTimeline.Read(kv.Value);
