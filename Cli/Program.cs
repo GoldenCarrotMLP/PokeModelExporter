@@ -430,10 +430,11 @@ switch (rest[0])
         foreach (var line in SvSceneObjects.Describe(data)) Console.WriteLine(line);
         break;
     }
-    case "timeline": // timeline <move number> [file suffix: attack, 1...] [--all-conditions]: a move's effect timeline (effect/battle_ew/ew<move>/ew<move>[_suffix].trtml)
+    case "timeline": // timeline <move number | timeline path> [file suffix: attack, 1...] [--all-conditions]: a move's effect timeline (effect/battle_ew/ew<move>/ew<move>[_suffix].trtml)
     {
         string suffix = rest.Count > 2 && !rest[2].StartsWith("--") ? "_" + rest[2] : "";
-        string path = $"effect/battle_ew/ew{int.Parse(rest[1]):D4}/ew{int.Parse(rest[1]):D4}{suffix}.trtml";
+        // A move number, or any timeline by archive path (effect/battle_es/es001/es001.trtml: the battle's system effects).
+        string path = rest[1].Contains('/') ? rest[1] : $"effect/battle_ew/ew{int.Parse(rest[1]):D4}/ew{int.Parse(rest[1]):D4}{suffix}.trtml";
         var data = archive.Read(path);
         if (data == null) { Console.Error.WriteLine("not found: " + path); return 1; }
         var timeline = SvMoveTimeline.Read(data);
