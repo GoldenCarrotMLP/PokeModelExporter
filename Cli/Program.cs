@@ -422,9 +422,9 @@ switch (rest[0])
         Console.WriteLine($"{glb.Length / 1024} KB -> {outFile}");
         break;
     }
-    case "sceneobjects": // sceneobjects <move number> [file suffix, default 0]: the move's scene object tree (.trsot): objects and their components
+    case "sceneobjects": // sceneobjects <move number | .trsot path> [file suffix, default 0]: the move's scene object tree (.trsot): objects and their components
     {
-        string path = $"effect/battle_ew/ew{int.Parse(rest[1]):D4}/ew{int.Parse(rest[1]):D4}_{(rest.Count > 2 ? rest[2] : "0")}.trsot";
+        string path = rest[1].Contains('/') ? rest[1] : $"effect/battle_ew/ew{int.Parse(rest[1]):D4}/ew{int.Parse(rest[1]):D4}_{(rest.Count > 2 ? rest[2] : "0")}.trsot";
         var data = archive.Read(path);
         if (data == null) { Console.Error.WriteLine("not found: " + path); return 1; }
         foreach (var line in SvSceneObjects.Describe(data)) Console.WriteLine(line);
@@ -515,9 +515,14 @@ switch (rest[0])
             string path = line.Substring(line.IndexOf(' ') + 1);
             var m = System.Text.RegularExpressions.Regex.Match(path, @"^effect/battle_ew/ew(\d{4})/(ew\d{4}(?:_\d+|_[a-z][a-z0-9_]*)?)\.(trtml|trsot)$|^effect/battle_ew/ew(\d{4})/(ew\d{4}(?:_\d+)?)_0\.trsot$");
             // The battle's system effects (stat up / down, heal, statuses, Substitute...): es001.. as -1, -2... (es<n>.json).
-            var es = System.Text.RegularExpressions.Regex.Match(path, @"^effect/battle_es/es(\d{3})/es\d{3}(?:_0)?\.(trtml|trsot)$");
-            if (!m.Success && !es.Success) continue;
-            int move = es.Success ? -int.Parse(es.Groups[1].Value) : int.Parse(m.Groups[1].Success ? m.Groups[1].Value : m.Groups[4].Value);
+            // The five statuses (es001-005) keep their scene objects and particles in effect/field/status/es<n>/.
+            var es = System.Text.RegularExpressions.Regex.Match(path, @"^effect/(?:battle_es|field/status)/es(\d{3})/es\d{3}(?:_0)?\.(trtml|trsot)$");
+            // Battle events the stage plays: entry hazards hurting a Pokemon as it comes in (ee040 Spikes, ee041 Toxic
+            // Spikes, ee042 Stealth Rock), as -1040.. (ee<n>.json).
+            var ee = System.Text.RegularExpressions.Regex.Match(path, @"^effect/battle_ee/ee(04[0-2])/ee\d{3}(?:_0)?\.(trtml|trsot)$");
+            if (!m.Success && !es.Success && !ee.Success) continue;
+            int move = es.Success ? -int.Parse(es.Groups[1].Value) : ee.Success ? -1000 - int.Parse(ee.Groups[1].Value)
+                : int.Parse(m.Groups[1].Success ? m.Groups[1].Value : m.Groups[4].Value);
             if (only.Count > 0 && !only.Contains(move)) continue;
             if (!byMove.TryGetValue(move, out var list)) byMove[move] = list = new List<string>();
             list.Add(path);
@@ -547,12 +552,12 @@ switch (rest[0])
                 var first = scenes.OrderBy(k => k.Key, StringComparer.Ordinal).First().Value;
                 foreach (var stem in timelines.Keys) if (!scenes.ContainsKey(stem)) scenes[stem] = first;
             }
-            string folder = kv.Key < 0 ? $"effect/battle_es/es{-kv.Key:D3}" : null;
+            string folder = kv.Key <= -1000 ? $"effect/battle_ee/ee{-1000 - kv.Key:D3}" : kv.Key < 0 ? $"effect/battle_es/es{-kv.Key:D3}" : null;
             string json = SvMoveFx.Export(kv.Key, timelines, scenes, archive.Read, out int count,
                 (path, name, cx, cy) => { if (!textureSources.ContainsKey(name)) textureSources[name] = (path, cx, cy); },
                 (path, name, prim) => { if (!primitiveShapes.ContainsKey(name)) { var shape = FxPrimitiveShape.Analyze(prim); shape.Source = path; primitiveShapes[name] = shape; } },
                 folder);
-            string file = Path.Combine(outDir, kv.Key < 0 ? $"es{-kv.Key:D3}.json" : $"{kv.Key:D4}.json");
+            string file = Path.Combine(outDir, kv.Key <= -1000 ? $"ee{-1000 - kv.Key:D3}.json" : kv.Key < 0 ? $"es{-kv.Key:D3}.json" : $"{kv.Key:D4}.json");
             File.WriteAllText(file, json);
             total += json.Length; files++; emitters += count;
         }

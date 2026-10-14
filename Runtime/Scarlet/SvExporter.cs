@@ -179,9 +179,13 @@ namespace PokeModelExporter.Scarlet
                 // Most meshes are stored in model space at the bind pose (Earthquake's shards sit where their joints
                 // are); some relative to their joint (Trick's cup sits at the origin while its joint rests 0.75 aside).
                 // Those are moved into model space first, so the bind-pose skinning puts both in the right place.
+                // A joint resting far from scale 1 always holds its meshes relative to it: Shell Smash's shell rests at
+                // 0.01 and grows to 1, and a model-space mesh would grow 100 times with it.
                 var bind = world[model.Nodes.IndexOf(node)];
                 var centre = Centre(mesh.Positions);
-                if (bind.Translation.Length() > 0.05f && centre.Length() < 0.3f * bind.Translation.Length())
+                float scale = System.Numerics.Vector3.TransformNormal(System.Numerics.Vector3.UnitX, bind).Length();
+                if (scale < 0.5f || scale > 2f
+                    || bind.Translation.Length() > 0.05f && centre.Length() < 0.3f * bind.Translation.Length())
                 {
                     for (int i = 0; i < mesh.Positions.Length; i++) mesh.Positions[i] = System.Numerics.Vector3.Transform(mesh.Positions[i], bind);
                     if (mesh.Normals != null)
