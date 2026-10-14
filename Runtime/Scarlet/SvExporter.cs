@@ -159,26 +159,66 @@ namespace PokeModelExporter.Scarlet
             }, null);
         }
 
-        // Effect models aren't skinned: each mesh rides the joint of the same name (Maya's "shard1_shape" under
-        // "shard1"), its vertices in model space at the bind pose. Bound as skinned meshes with weight 1 on that joint,
+        // Effect models aren't skinned: each mesh rides the joint of the same name without "_shape" (Maya's
+        // "shard1_shape" under "shard1", "pl_cup0_shape1" under "pl_cup01"), its vertices in model space at the bind pose. Bound as skinned meshes with weight 1 on that joint,
         // the clips move them (Earthquake's rock rises and breaks; before, only empty joints moved).
         static void BindRigidMeshes(ModelData model)
         {
             if (model.Nodes.Count == 0 || model.Meshes.TrueForAll(m => m.Joints != null)) return;
             int next = 0;
             foreach (var n in model.Nodes) next = Math.Max(next, n.SkinIndex + 1);
+            var world = GlbWriter.WorldMatrices(model);
             foreach (var mesh in model.Meshes)
             {
                 if (mesh.Joints != null || mesh.Positions == null) continue;
-                string joint = mesh.Name.EndsWith("_shape", StringComparison.Ordinal) ? mesh.Name.Substring(0, mesh.Name.Length - 6) : mesh.Name;
-                var node = model.Nodes.Find(n => n.Name == joint && !n.IsLocator) ?? model.Nodes.Find(n => !n.IsLocator);
+                NodeData node = null;
+                foreach (var joint in JointNames(mesh.Name))
+                    if ((node = model.Nodes.Find(n => n.Name == joint && !n.IsLocator)) != null) break;
+                node ??= model.Nodes.Find(n => !n.IsLocator);
                 if (node == null) continue;
+                // Most meshes are stored in model space at the bind pose (Earthquake's shards sit where their joints
+                // are); some relative to their joint (Trick's cup sits at the origin while its joint rests 0.75 aside).
+                // Those are moved into model space first, so the bind-pose skinning puts both in the right place.
+                var bind = world[model.Nodes.IndexOf(node)];
+                var centre = Centre(mesh.Positions);
+                if (bind.Translation.Length() > 0.05f && centre.Length() < 0.3f * bind.Translation.Length())
+                {
+                    for (int i = 0; i < mesh.Positions.Length; i++) mesh.Positions[i] = System.Numerics.Vector3.Transform(mesh.Positions[i], bind);
+                    if (mesh.Normals != null)
+                        for (int i = 0; i < mesh.Normals.Length; i++) mesh.Normals[i] = System.Numerics.Vector3.Normalize(System.Numerics.Vector3.TransformNormal(mesh.Normals[i], bind));
+                }
                 if (node.SkinIndex < 0) node.SkinIndex = next++;
                 int count = mesh.Positions.Length;
                 mesh.Joints = new int[count * 4];
                 mesh.Weights = new float[count * 4];
                 for (int i = 0; i < count; i++) { mesh.Joints[i * 4] = node.SkinIndex; mesh.Weights[i * 4] = 1; }
             }
+        }
+
+        static System.Numerics.Vector3 Centre(System.Numerics.Vector3[] points)
+        {
+            var min = new System.Numerics.Vector3(float.MaxValue); var max = new System.Numerics.Vector3(float.MinValue);
+            foreach (var p in points) { min = System.Numerics.Vector3.Min(min, p); max = System.Numerics.Vector3.Max(max, p); }
+            return (min + max) * 0.5f;
+        }
+
+        // The joint a Maya shape node belongs to, most likely first: "shard1_shape" -> shard1, "pl_cup0_shape1" ->
+        // pl_cup01, "ring1_shape12" -> ring12, "ew0919_chain_shape1" -> ew0919_chain01, "rod1_r_shape__duprename_x" -> rod1_r.
+        static IEnumerable<string> JointNames(string mesh)
+        {
+            int at = mesh.IndexOf("_shape", StringComparison.Ordinal);
+            if (at < 0) { yield return mesh; yield break; }
+            string prefix = mesh.Substring(0, at), rest = mesh.Substring(at + 6);
+            string digits = new string(rest.TakeWhile(char.IsDigit).ToArray());
+            string bare = prefix.TrimEnd('0', '1', '2', '3', '4', '5', '6', '7', '8', '9');
+            yield return prefix + rest;
+            if (digits.Length > 0)
+            {
+                yield return bare + digits;
+                yield return prefix + digits.PadLeft(2, '0');
+                yield return bare + digits.PadLeft(2, '0');
+            }
+            yield return prefix; // last: it can be the model's own root ("ew0919_chain")
         }
 
         // Every skeletal clip listed in the model's animation resource file, with its notifies (.traef) and

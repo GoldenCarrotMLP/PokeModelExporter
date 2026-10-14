@@ -320,7 +320,7 @@ namespace PokeModelExporter.Export
             Array.Copy(v, 0, dst, at, 16);
         }
 
-        static Matrix4x4[] WorldMatrices(ModelData model)
+        internal static Matrix4x4[] WorldMatrices(ModelData model)
         {
             var world = new Matrix4x4[model.Nodes.Count];
             var done = new bool[model.Nodes.Count];
