@@ -203,7 +203,9 @@ namespace PokeModelExporter.Formats
         public float[] RotateInit = new float[3], RotateInitRandom = new float[3], RotateAdd = new float[3], RotateAddRandom = new float[3];
         public float RotateResistance;
 
-        // EmitterInfo
+        // EmitterInfo. Draw: the emitter draws its own particles (0 on parents that only spawn children: Soft-Boiled's
+        // white "oya" squares, Mega Drain's gp; every other emitter has 1).
+        public bool Draw = true;
         public byte SortType, CalcType, FollowType;
         public bool FadeOnEmitEnd, AlphaFadeOnFade, ScaleFadeOnFade, AlphaFadeIn, ScaleFadeIn;
         public int AlphaFadeTime, FadeInTime;
@@ -321,7 +323,7 @@ namespace PokeModelExporter.Formats
             r.Skip(16); // scale limit by distance, padding
 
             // EmitterInfo
-            r.U8(); e.SortType = r.U8(); e.CalcType = r.U8(); e.FollowType = r.U8();
+            e.Draw = r.U8() != 0; e.SortType = r.U8(); e.CalcType = r.U8(); e.FollowType = r.U8();
             e.FadeOnEmitEnd = r.U8() != 0; e.AlphaFadeOnFade = r.U8() != 0; e.ScaleFadeOnFade = r.U8() != 0; r.U8();
             r.U8(); r.U8(); r.U8(); e.AlphaFadeIn = r.U8() != 0; e.ScaleFadeIn = r.U8() != 0; r.Skip(3);
             r.Skip(8); // random seed, draw path

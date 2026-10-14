@@ -13,7 +13,9 @@ namespace PokeModelExporter.Scarlet
     // (emitter parameters, texture names, primitive ids). Nothing of the game's art is included: textures and
     // meshes are referenced by name only, for the engine to draw with its own.
     //
-    // Variants: ew<move>.trtml, or one per hit (_1 first, _2 following hits) or per Tera type (_00..).
+    // Variants: ew<move>.trtml, or one per hit (_1 first, _2 following hits) or per Tera type (_00..); named ones
+    // for other moments: "attack" = the release turn of a charge move (Solar Beam, Dig, Fly...; the plain timeline is
+    // the charge turn), "turn" = end-of-turn damage of trapping moves, "back" = sent back (Roar, U-turn)...
     // Conditions: groups that can't happen in a trainer's singles battle are dropped; the ones that depend on
     // the Pokemon involved (size class, Tera type, target count, perspective) are kept for the engine to check.
     public static class SvMoveFx
@@ -33,7 +35,9 @@ namespace PokeModelExporter.Scarlet
         };
 
         // Checked by the engine per use.
-        static readonly HashSet<string> Runtime = new HashSet<string> { "PokeSizeCategory", "TargetMulti", "SelfOther", "PokeGem", "PokeGemType" };
+        // TargetPosition: which way the camera sees a Pokemon (AttackerBack = the user from behind, i.e. on the player's
+        // side; AttackerForward = the opponent; Defender... the same for the target). Amnesia's "?" smoke turns to face it.
+        static readonly HashSet<string> Runtime = new HashSet<string> { "PokeSizeCategory", "TargetMulti", "SelfOther", "PokeGem", "PokeGemType", "TargetPosition" };
 
         // Command types worth replaying; the rest drive SV's camera, UI, collision and debugging.
         static bool Keep(string type) =>
@@ -65,6 +69,10 @@ namespace PokeModelExporter.Scarlet
                 var timeline = SvMoveTimeline.Read(kv.Value);
                 var objects = sceneObjects.TryGetValue(kv.Key, out var sot) ? SvSceneObjects.Read(sot) : new Dictionary<string, List<string>>();
                 var models = sot != null ? SvSceneObjects.Models(sot) : new Dictionary<string, string>();
+                // Every effect of the scene, also those no timeline object plays: the game starts some from code
+                // (Transform's start_charge / end_impact around the model swap).
+                foreach (var paths in objects.Values)
+                    foreach (var path in paths) effects[System.IO.Path.GetFileNameWithoutExtension(path)] = path;
                 w.BeginObject().Name("name").Value(kv.Key.Substring(6).TrimStart('_')).Name("frames").Value(timeline.Frames);
                 w.Name("objects").BeginArray();
                 foreach (var group in timeline.Groups)
@@ -215,6 +223,7 @@ namespace PokeModelExporter.Scarlet
                 // On a child: whether its parent draws its own particles (Growl's "null" parents only spawn rings).
                 if (!e.EnableEmitterParticle) w.Name("showParent").Value(false);
             }
+            if (!e.Draw) w.Name("draw").Value(false); // only spawns its children
             // Emission (frames at 60 fps)
             w.Name("oneTime").Value(e.OneTime).Name("start").Value(e.EmitStart).Name("duration").Value(e.EmitDuration)
                 .Name("rate").Raw(N(e.Rate)).Name("interval").Value(e.Interval);
@@ -278,8 +287,16 @@ namespace PokeModelExporter.Scarlet
             // shader's per-emitter constants (alpha gain at 48, texture add at 52, edge colour + weight at 64..76,
             // found in its compiled fragment programs).
             w.Name("customShader").Value(e.CustomShaderIndex);
+            // Stripes (emitter plugins EP02 "stripe", EP03 "super stripe"): each particle draws a ribbon through its last
+            // `history` frames of positions instead of its own quad (String Shot's threads, trails behind projectiles).
+            // EP02 = 4 enums, a float, then the history length; EP03 = 6 enums, then the history length.
+            if (e.AttributeData.TryGetValue("EP02", out var ep02) && ep02.Length > 5) w.Name("stripe").BeginArray().Value(2).Raw(N(ep02[5])).EndArray();
+            else if (e.AttributeData.TryGetValue("EP03", out var ep03) && ep03.Length > 6) w.Name("stripe").BeginArray().Value(3).Raw(N(ep03[6])).EndArray();
+            // EP04: drawn in front of the camera (Blizzard's white-out, Tera Blast's screen fire): distance = -float 10.
+            if (e.AttributeData.TryGetValue("EP04", out var ep04) && ep04.Length > 10) w.Name("camera").Raw(N(Math.Abs(ep04[10])));
             if (e.AttributeData.TryGetValue("CSDP", out var csdp) && csdp.Length >= 20)
-                w.Name("csdp").BeginArray().Raw(N(csdp[12])).Raw(N(csdp[13])).Raw(N(csdp[16])).Raw(N(csdp[17])).Raw(N(csdp[18])).Raw(N(csdp[19])).EndArray();
+                w.Name("csdp").BeginArray().Raw(N(csdp[12])).Raw(N(csdp[13])).Raw(N(csdp[16])).Raw(N(csdp[17])).Raw(N(csdp[18])).Raw(N(csdp[19]))
+                    .Raw(N(csdp[14])).Raw(N(csdp[15])).EndArray(); // then 56, 60: shader set 2's lit-texture weight and its offset
             if (e.ParamKeys != null && e.ParamKeys.Length > 0)
                 w.Name("param").BeginArray().Raw(N(e.ParamKeys[0].X)).Raw(N(e.ParamKeys[0].Y)).Raw(N(e.ParamKeys[0].Z)).EndArray();
             if (e.ShaderType != 0) w.Name("shaderType").Value(e.ShaderType);

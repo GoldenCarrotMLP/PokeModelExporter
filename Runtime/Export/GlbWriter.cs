@@ -62,6 +62,8 @@ namespace PokeModelExporter.Export
             {
                 var map = mapMaterial(mat);
                 var pbr = new List<string> { $"\"metallicFactor\":{F(map.Metallic)}", $"\"roughnessFactor\":{F(map.Roughness)}" };
+                if (map.BaseColorFactor != null)
+                    pbr.Add($"\"baseColorFactor\":[{string.Join(",", Array.ConvertAll(map.BaseColorFactor, F))}]");
                 if (map.BaseColorTexture != null && imageIndex.TryGetValue(map.BaseColorTexture, out int bc))
                     pbr.Add($"\"baseColorTexture\":{{\"index\":{bc}}}");
                 if (map.MetallicRoughnessTexture != null && imageIndex.TryGetValue(map.MetallicRoughnessTexture, out int mr))
@@ -434,6 +436,7 @@ namespace PokeModelExporter.Export
         // glTF packing: occlusion in R (OcclusionTexture), roughness in G, metallic in B (MetallicRoughnessTexture).
         public string MetallicRoughnessTexture, OcclusionTexture;
         public float Roughness = 0.8f, Metallic;
+        public float[] BaseColorFactor; // rgba; null = white (the texture alone)
         public bool AlphaBlend, DoubleSided, Unlit;
 
         public static MaterialMapping Default(MaterialData m)

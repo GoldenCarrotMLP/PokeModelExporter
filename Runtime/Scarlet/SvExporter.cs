@@ -70,7 +70,15 @@ namespace PokeModelExporter.Scarlet
         public Result Export(int species, int form, int gender, Options options)
         {
             var entry = Find(species, form, gender);
-            if (entry == null) return null;
+            return entry == null ? null : Export(entry, options);
+        }
+
+        // The catalog's own species numbers past the Pokedex: 9999 = the Substitute doll (pm9999, migawari).
+        public const int SubstituteDoll = 9999;
+
+        // A catalog entry directly (models that aren't Pokemon, like the Substitute doll).
+        public Result Export(SvCatalog.Entry entry, Options options)
+        {
             string folder = SvCatalog.DataRoot + entry.Folder;
             Func<string, byte[]> read = file => Archive.Read(folder + file);
 
@@ -111,6 +119,66 @@ namespace PokeModelExporter.Scarlet
                 ActorManifest = ActorManifest.Write(model, entry, config, options.Shiny),
                 Read = read,
             };
+        }
+
+        // A move's effect model (a scene object's trinity_ModelComponent, e.g. Earthquake's rocks
+        // effect/battle_ew/ew0089/ew0089_rock/ew0089_rock.trmdl) as a GLB: meshes, skeleton, baked textures and every
+        // clip its animation resource lists (an effect model usually has one, named like the model: "default").
+        // readArchive: any archive file by path. Null when the model isn't there.
+        public static byte[] ExportEffectModel(Func<string, byte[]> readArchive, string modelPath)
+        {
+            int slash = modelPath.LastIndexOf('/');
+            string folder = modelPath.Substring(0, slash + 1), file = modelPath.Substring(slash + 1);
+            Func<string, byte[]> read = f => readArchive(folder + f);
+            if (read(file) == null) return null;
+            var model = TrinityModelReader.Read(file, read);
+            var tracr = read(model.Name + ".tracr") ?? read(model.Name + "_base.tracr");
+            var clips = tracr != null ? TrinityAnimationReader.ClipNamesFromResource(tracr) : new List<string>();
+            if (clips.Count == 0 && read(model.Name + ".tranm") != null) clips.Add(model.Name + ".tranm");
+            foreach (var clipFile in clips)
+            {
+                var data = read(clipFile);
+                if (data == null) continue;
+                string stem = Path.GetFileNameWithoutExtension(clipFile);
+                string clip = stem == model.Name ? "default" : stem.StartsWith(model.Name + "_", StringComparison.Ordinal) ? stem.Substring(model.Name.Length + 1) : stem;
+                var anim = TrinityAnimationReader.Read(data, clip);
+                var tracm = read(Path.ChangeExtension(clipFile, ".tracm"));
+                if (tracm != null) TrinityCurveReader.Read(tracm, anim);
+                model.Animations.Add(anim);
+            }
+            BindRigidMeshes(model);
+            var baked = SvMaterialBaker.Bake(model, read);
+            // Effect materials without a colour texture (Guillotine's claws, Bind's rings: the game feeds them from
+            // elsewhere) show their BaseColor instead of plain white.
+            return GlbWriter.Write(model, baked.Textures, m =>
+            {
+                var map = baked.Mappings[m.Name];
+                bool textured = map.BaseColorTexture != null && baked.Textures.ContainsKey(map.BaseColorTexture);
+                if (!textured && m.Colors.TryGetValue("BaseColor", out var c)) map.BaseColorFactor = new[] { c.X, c.Y, c.Z, 1f };
+                return map;
+            }, null);
+        }
+
+        // Effect models aren't skinned: each mesh rides the joint of the same name (Maya's "shard1_shape" under
+        // "shard1"), its vertices in model space at the bind pose. Bound as skinned meshes with weight 1 on that joint,
+        // the clips move them (Earthquake's rock rises and breaks; before, only empty joints moved).
+        static void BindRigidMeshes(ModelData model)
+        {
+            if (model.Nodes.Count == 0 || model.Meshes.TrueForAll(m => m.Joints != null)) return;
+            int next = 0;
+            foreach (var n in model.Nodes) next = Math.Max(next, n.SkinIndex + 1);
+            foreach (var mesh in model.Meshes)
+            {
+                if (mesh.Joints != null || mesh.Positions == null) continue;
+                string joint = mesh.Name.EndsWith("_shape", StringComparison.Ordinal) ? mesh.Name.Substring(0, mesh.Name.Length - 6) : mesh.Name;
+                var node = model.Nodes.Find(n => n.Name == joint && !n.IsLocator) ?? model.Nodes.Find(n => !n.IsLocator);
+                if (node == null) continue;
+                if (node.SkinIndex < 0) node.SkinIndex = next++;
+                int count = mesh.Positions.Length;
+                mesh.Joints = new int[count * 4];
+                mesh.Weights = new float[count * 4];
+                for (int i = 0; i < count; i++) { mesh.Joints[i * 4] = node.SkinIndex; mesh.Weights[i * 4] = 1; }
+            }
         }
 
         // Every skeletal clip listed in the model's animation resource file, with its notifies (.traef) and

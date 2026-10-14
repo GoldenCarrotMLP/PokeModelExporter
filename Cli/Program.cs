@@ -412,17 +412,28 @@ switch (rest[0])
         break;
     }
 
-    case "sceneobjects": // sceneobjects <move number>: the move's scene object tree (.trsot): objects and their components
+    case "fxmodel": // fxmodel <model path in the archive> --out <file.glb>: a move's effect model (Earthquake's rocks...)
     {
-        string path = $"effect/battle_ew/ew{int.Parse(rest[1]):D4}/ew{int.Parse(rest[1]):D4}_0.trsot";
+        int o = rest.IndexOf("--out");
+        var glb = SvExporter.ExportEffectModel(archive.Read, rest[1]);
+        if (glb == null) { Console.Error.WriteLine("not found: " + rest[1]); return 1; }
+        string outFile = Path.GetFullPath(o >= 0 ? rest[o + 1] : "fxmodel.glb");
+        File.WriteAllBytes(outFile, glb);
+        Console.WriteLine($"{glb.Length / 1024} KB -> {outFile}");
+        break;
+    }
+    case "sceneobjects": // sceneobjects <move number> [file suffix, default 0]: the move's scene object tree (.trsot): objects and their components
+    {
+        string path = $"effect/battle_ew/ew{int.Parse(rest[1]):D4}/ew{int.Parse(rest[1]):D4}_{(rest.Count > 2 ? rest[2] : "0")}.trsot";
         var data = archive.Read(path);
         if (data == null) { Console.Error.WriteLine("not found: " + path); return 1; }
         foreach (var line in SvSceneObjects.Describe(data)) Console.WriteLine(line);
         break;
     }
-    case "timeline": // timeline <move number> [--all-conditions]: a move's effect timeline (effect/battle_ew/ew<move>/ew<move>.trtml)
+    case "timeline": // timeline <move number> [file suffix: attack, 1...] [--all-conditions]: a move's effect timeline (effect/battle_ew/ew<move>/ew<move>[_suffix].trtml)
     {
-        string path = $"effect/battle_ew/ew{int.Parse(rest[1]):D4}/ew{int.Parse(rest[1]):D4}.trtml";
+        string suffix = rest.Count > 2 && !rest[2].StartsWith("--") ? "_" + rest[2] : "";
+        string path = $"effect/battle_ew/ew{int.Parse(rest[1]):D4}/ew{int.Parse(rest[1]):D4}{suffix}.trtml";
         var data = archive.Read(path);
         if (data == null) { Console.Error.WriteLine("not found: " + path); return 1; }
         var timeline = SvMoveTimeline.Read(data);
@@ -501,7 +512,7 @@ switch (rest[0])
         foreach (var line in File.ReadLines(rest[h + 1]))
         {
             string path = line.Substring(line.IndexOf(' ') + 1);
-            var m = System.Text.RegularExpressions.Regex.Match(path, @"^effect/battle_ew/ew(\d{4})/(ew\d{4}(?:_\d+)?)\.(trtml|trsot)$|^effect/battle_ew/ew(\d{4})/(ew\d{4}(?:_\d+)?)_0\.trsot$");
+            var m = System.Text.RegularExpressions.Regex.Match(path, @"^effect/battle_ew/ew(\d{4})/(ew\d{4}(?:_\d+|_[a-z][a-z0-9_]*)?)\.(trtml|trsot)$|^effect/battle_ew/ew(\d{4})/(ew\d{4}(?:_\d+)?)_0\.trsot$");
             if (!m.Success) continue;
             int move = int.Parse(m.Groups[1].Success ? m.Groups[1].Value : m.Groups[4].Value);
             if (only.Count > 0 && !only.Contains(move)) continue;
