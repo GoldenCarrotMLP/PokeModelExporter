@@ -39,7 +39,8 @@ namespace PokeModelExporter.Scarlet
         // side; AttackerForward = the opponent; Defender... the same for the target). Amnesia's "?" smoke turns to face it.
         static readonly HashSet<string> Runtime = new HashSet<string> { "PokeSizeCategory", "TargetMulti", "SelfOther", "PokeGem", "PokeGemType", "TargetPosition" };
 
-        // Command types worth replaying; the rest drive SV's camera, UI, collision and debugging.
+        // Command types worth replaying (the camera too: CompositionCamera* framings, ResetBattleCamera); the rest drive
+        // SV's UI, collision and debugging.
         static bool Keep(string type) =>
             type.StartsWith("Particle/", StringComparison.Ordinal) ||
             type.StartsWith("GameObject/", StringComparison.Ordinal) && type != "GameObject/DisableCulling" && type != "GameObject/DisableOcclusion" ||
@@ -50,7 +51,8 @@ namespace PokeModelExporter.Scarlet
             type.StartsWith("Light/", StringComparison.Ordinal) ||
             type.StartsWith("Model/", StringComparison.Ordinal) ||
             type == "Title/Battle/GaugeDamage" || type == "Title/Battle/AttackMotion" || type == "Title/Battle/CameraShake" ||
-            type == "Title/Battle/CameraShakeFade" || type == "Title/Battle/AdjustScale" || type == "Title/Battle/AdjustScaleTarget" ||
+            type == "Title/Battle/CameraShakeFade" || type.StartsWith("Title/Battle/CompositionCamera", StringComparison.Ordinal) ||
+            type == "Title/Battle/ResetBattleCamera" || type == "Title/Battle/AdjustScale" || type == "Title/Battle/AdjustScaleTarget" ||
             type == "Title/Battle/ResetPosition" || type == "Title/Battle/SetCenterPosition" || type == "Title/Battle/MigawariVisible" || type == "Title/Battle/TameVisible" ||
             type == "Animation/SetTrigger" || type == "Animation/SetInt" || type == "Animation/SetMasterSpeed";
 
