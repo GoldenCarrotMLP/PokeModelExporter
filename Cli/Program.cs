@@ -197,6 +197,27 @@ switch (rest[0])
         break;
     }
 
+    case "personal": // personal: every species/form of the game's personal table (raw fields for research), tab-separated
+    {
+        var entries = FbTable.Root(archive.Read(SvPersonal.Path)).Vector(0);
+        var catalog = new SvCatalog(archive.Read(SvCatalog.Path));
+        var models = new HashSet<(int, int)>(catalog.Entries.Select(c => (c.Species, c.Form)));
+        Console.WriteLine("national	form	internal	present	model	stats	f3..f9 (u8)");
+        for (int i = 0; i < entries.Length; i++)
+        {
+            var e = entries.Table(i);
+            int p = e.InlineStruct(0);
+            if (p == 0) continue;
+            var b = e.Buffer;
+            int index = BitConverter.ToUInt16(b, p), form = BitConverter.ToUInt16(b, p + 2), national = BitConverter.ToUInt16(b, p + 4);
+            int s = e.FieldPosition(22);
+            string stats = s == 0 ? "-" : string.Join("/", Enumerable.Range(0, 6).Select(k => b[s + k]));
+            string raw = string.Join(" ", Enumerable.Range(3, 7).Select(f => e.FieldPosition(f) == 0 ? "-" : e.U8(f).ToString()));
+            Console.WriteLine($"{national}	{form}	{index}	{(e.Bool(1) ? 1 : 0)}	{(models.Contains((index, form)) ? 1 : 0)}	{stats}	{raw}");
+        }
+        break;
+    }
+
     case "model": // model <national dex> [form] [gender] [--shiny]: load and summarize a Pokemon model
     {
         var model = LoadModel(archive, rest);

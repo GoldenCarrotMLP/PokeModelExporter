@@ -15,10 +15,20 @@ namespace PokeModelExporter.Scarlet
     {
         public const string Path = "avalon/data/personal_array.bin";
         const int StatsField = 22; // StatInfo hp/atk/def/spa/spd/spe (bytes); the schema's slot count is off by two
+        const int Type1Field = 5, Type2Field = 6; // also two past the schema's type1 / type2 (checked against Showdown)
+
+        // The game's type numbers.
+        public static readonly string[] TypeNames =
+        {
+            "Normal", "Fighting", "Flying", "Poison", "Ground", "Rock", "Bug", "Ghost", "Steel",
+            "Fire", "Water", "Grass", "Electric", "Psychic", "Ice", "Dragon", "Dark", "Fairy",
+        };
 
         readonly Dictionary<(int national, int form), int> _internal = new Dictionary<(int, int), int>();
         readonly Dictionary<(int national, int form), int[]> _stats = new Dictionary<(int, int), int[]>();
         readonly HashSet<(int national, int form)> _present = new HashSet<(int, int)>();
+        readonly Dictionary<(int national, int form), string[]> _types = new Dictionary<(int, int), string[]>();
+        readonly Dictionary<int, List<int>> _forms = new Dictionary<int, List<int>>();
 
         public SvPersonal(byte[] data)
         {
@@ -35,6 +45,14 @@ namespace PokeModelExporter.Scarlet
                 int s = e.FieldPosition(StatsField);
                 if (s != 0 && !_stats.ContainsKey(key)) _stats[key] = new int[] { b[s], b[s + 1], b[s + 2], b[s + 3], b[s + 4], b[s + 5] };
                 if (e.Bool(1)) _present.Add(key);
+                if (!_types.ContainsKey(key))
+                {
+                    int t1 = e.U8(Type1Field), t2 = e.U8(Type2Field); // absent = 0 = Normal
+                    if (t1 < TypeNames.Length && t2 < TypeNames.Length)
+                        _types[key] = t1 == t2 ? new[] { TypeNames[t1] } : new[] { TypeNames[t1], TypeNames[t2] };
+                    if (!_forms.TryGetValue(key.Item1, out var forms)) _forms[key.Item1] = forms = new List<int>();
+                    forms.Add(form);
+                }
             }
         }
 
@@ -48,6 +66,12 @@ namespace PokeModelExporter.Scarlet
         // Base stats (hp, atk, def, spa, spd, spe) the game has for a National Dex number and form, or null.
         // Lets callers check the mapping against their own data (PokeSim compares them with Showdown's).
         public int[] Stats(int national, int form = 0) => _stats.TryGetValue((national, form), out var s) ? s : null;
+
+        // Types the game has for a National Dex number and form (one or two names, Showdown's spelling), or null.
+        public string[] Types(int national, int form = 0) => _types.TryGetValue((national, form), out var t) ? t : null;
+
+        // Every form number the table lists for a National Dex number.
+        public IReadOnlyList<int> Forms(int national) => _forms.TryGetValue(national, out var f) ? f : (IReadOnlyList<int>)System.Array.Empty<int>();
 
         // Whether the species/form can appear in this game (is_present).
         public bool IsPresent(int national, int form = 0) => _present.Contains((national, form));

@@ -81,7 +81,7 @@ namespace PokeModelExporter.Export
                 if (map.AlphaBlend) parts.Add("\"alphaMode\":\"BLEND\"");
                 if (map.Unlit) { parts.Add("\"extensions\":{\"KHR_materials_unlit\":{}}"); usesUnlit = true; }
                 if (map.DoubleSided) parts.Add("\"doubleSided\":true");
-                parts.Add($"\"extras\":{MaterialExtras(mat)}");
+                parts.Add($"\"extras\":{MaterialExtras(mat, map.Maps, imageIndex)}");
                 materialIndex[mat.Name] = materials.Count;
                 materials.Add("{" + string.Join(",", parts) + "}");
             }
@@ -335,7 +335,8 @@ namespace PokeModelExporter.Export
             Array.Copy(v, 0, dst, at, 16);
         }
 
-        // A closed shell whose triangles (nearly) all face its middle: an inverted-hull outline.
+        // A closed shell whose triangles (nearly) all face its middle: an inverted-hull outline. Over 336 cached
+        // models, ordinary meshes reach at most 0.79 inward; hulls 0.94 (Rotom-Wash's aura, not convex) to 1.
         static bool IsInvertedHull(MeshData mesh)
         {
             var c = Vector3.Zero;
@@ -350,7 +351,7 @@ namespace PokeModelExporter.Export
                     if (Vector3.Dot(normal, (a + b + d) / 3 - c) < 0) inward++;
                     total++;
                 }
-            return total >= 20 && inward >= total * 0.95f;
+            return total >= 20 && inward >= total * 0.9f;
         }
 
         internal static Matrix4x4[] WorldMatrices(ModelData model)
@@ -412,9 +413,14 @@ namespace PokeModelExporter.Export
             return "[" + string.Join(",", parts) + "]";
         }
 
-        static string MaterialExtras(MaterialData m)
+        // maps: game texture slots shipped for engine shaders (SSS mask, layer mask...) -> their glTF texture index.
+        static string MaterialExtras(MaterialData m, Dictionary<string, string> maps, Dictionary<string, int> imageIndex)
         {
             var parts = new List<string>();
+            var mapParts = new List<string>();
+            foreach (var kv in maps)
+                if (imageIndex.TryGetValue(kv.Value, out int index)) mapParts.Add($"{Str(kv.Key)}:{index}");
+            if (mapParts.Count > 0) parts.Add($"\"maps\":{{{string.Join(",", mapParts)}}}");
             if (m.Shader != null) parts.Add($"\"shader\":{Str(m.Shader)}");
             if (m.AlphaType != null) parts.Add($"\"alphaType\":{Str(m.AlphaType)}");
             var tex = new List<string>();
@@ -471,6 +477,9 @@ namespace PokeModelExporter.Export
         public float Roughness = 0.8f, Metallic;
         public float[] BaseColorFactor; // rgba; null = white (the texture alone)
         public bool AlphaBlend, DoubleSided, Unlit;
+        // Game texture slots without a glTF role that engine shaders use (SSSMaskMap, LayerMaskMap, raw BaseColorMap,
+        // DisplacementMap, NormalMap1) -> texture name; written as plain (linear) textures, listed in extras.maps.
+        public readonly Dictionary<string, string> Maps = new Dictionary<string, string>();
 
         public static MaterialMapping Default(MaterialData m)
         {

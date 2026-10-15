@@ -24,7 +24,10 @@ namespace PokeModelExporter.Scarlet
         }
 
         // readTexture: texture file name (as in the material) -> BNTX bytes, or null.
-        public static Result Bake(ModelData model, Func<string, byte[]> readTexture)
+        // engineMaps: also keep the raw game maps an engine shader needs (MaterialMapping.Maps): SSS mask, eye coat
+        // normal, displacement, the layer mask of eyes and Unlit layered materials, and the latter's (flames) base
+        // map, so their HDR layer colours can be mixed at runtime instead of tone-mapped into the baked texture.
+        public static Result Bake(ModelData model, Func<string, byte[]> readTexture, bool engineMaps = false)
         {
             var result = new Result();
             var decoded = new Dictionary<string, Bntx.Texture>();
@@ -78,10 +81,38 @@ namespace PokeModelExporter.Scarlet
                     if (n != null) result.Textures[map.NormalTexture] = Png.Encode(n.Rgba, n.Width, n.Height);
                     else map.NormalTexture = null;
                 }
+                if (engineMaps) AddEngineMaps(mat, map, Load, result, layered: mask != null && HasLayers(mat));
                 result.Mappings[mat.Name] = map;
             }
             return result;
         }
+
+        static void AddEngineMaps(MaterialData m, MaterialMapping map, Func<string, bool, Bntx.Texture> load, Result result, bool layered)
+        {
+            void Add(string slot, bool normal = false)
+            {
+                if (!m.Textures.TryGetValue(slot, out var file) || !IsEnabled(m, slot)) return;
+                // Own key, never shared with a glTF slot's copy of the same file (those may be read as sRGB).
+                string key = "map_" + file;
+                if (!result.Textures.ContainsKey(key))
+                {
+                    var t = load(file, normal);
+                    if (t == null) return;
+                    result.Textures[key] = Png.Encode(t.Rgba, t.Width, t.Height);
+                }
+                map.Maps[slot] = key;
+            }
+            Add("SSSMaskMap");
+            Add("DisplacementMap");
+            Add("NormalMap1", normal: true);
+            if (map.Unlit && layered) Add("BaseColorMap");
+            // Flames mix their layers at runtime; eyes pick metallic / roughness per layer (sclera vs iris).
+            if (layered && (map.Unlit || m.Shader == "EyeClearCoat")) Add("LayerMaskMap");
+        }
+
+        // A texture slot counts unless its Enable<slot> option is "False" (EnableNormalMap1, EnableDisplacementMap...).
+        static bool IsEnabled(MaterialData m, string slot) =>
+            !m.ShaderOptions.TryGetValue("Enable" + slot, out var on) || on != "False";
 
         // AOMap -> its own occlusion texture (kept under its game name so it's easy to find);
         // RoughnessMap / MetallicMap -> one glTF metallic-roughness texture (G roughness, B metallic).

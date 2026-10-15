@@ -86,7 +86,7 @@ namespace PokeModelExporter.Scarlet
             if (options.Animations) LoadClips(model, read, options.Clips, options.MainClipSetOnly);
             if (options.Animations && options.MainClipSetOnly && model.Animations.Count > 0) KeepLocatorSet(model, model.Animations[0].Name[0]);
 
-            var baked = SvMaterialBaker.Bake(model, read);
+            var baked = SvMaterialBaker.Bake(model, read, engineMaps: true);
             Dictionary<string, byte[]> extra = null;
             if (options.ExtraImages)
             {
