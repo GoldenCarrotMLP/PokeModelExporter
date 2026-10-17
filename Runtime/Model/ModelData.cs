@@ -88,6 +88,9 @@ namespace PokeModelExporter.Model
         public Quaternion Rotation = Quaternion.Identity;
         public Vector3 Scale = Vector3.One;
         public int SkinIndex = -1;
+        // Segment scale compensation (Maya's): the parent's scale moves this node (its position) but doesn't scale or
+        // skew it. glTF has no such flag; ScaleCompensation.Apply rebuilds it with helper nodes.
+        public bool ScaleCompensate;
         // Effect locator (a named point VFX attach to, e.g. eff_mouth01), not a skinning bone.
         // LocatorSet tells sets apart when a model has several (SV: 00000, 10000, 20000).
         public bool IsLocator;

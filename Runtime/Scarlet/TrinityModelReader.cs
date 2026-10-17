@@ -73,6 +73,7 @@ namespace PokeModelExporter.Scarlet
         static void ReadSkeleton(FbTable skl, ModelData model)
         {
             var nodes = skl.Vector(1);
+            var bones = skl.Vector(2); // per rig index: segment scale compensate (PokeDocs: "inherit_position"), skinning flag, inverse bind matrix
             for (int i = 0; i < nodes.Length; i++)
             {
                 var n = nodes.Table(i);
@@ -80,14 +81,16 @@ namespace PokeModelExporter.Scarlet
                 var scale = Vec3(t, 0, Vector3.One);
                 var euler = Vec3(t, 1, Vector3.Zero);
                 var translate = Vec3(t, 2, Vector3.Zero);
+                int rig = n.I32(5, -1);
                 model.Nodes.Add(new NodeData
                 {
                     Name = n.String(0),
                     Parent = n.I32(4, -1),
-                    SkinIndex = n.I32(5, -1),
+                    SkinIndex = rig,
                     Translation = translate,
                     Rotation = EulerXyz(euler),
                     Scale = scale,
+                    ScaleCompensate = rig >= 0 && rig < bones.Length && bones.Table(rig).U8(0) != 0,
                 });
             }
         }

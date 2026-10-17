@@ -85,6 +85,7 @@ namespace PokeModelExporter.Scarlet
             var model = TrinityModelReader.Read(entry.ModelPath.Substring(entry.Folder.Length), read, shiny: options.Shiny, locatorFiles: entry.LocatorFiles());
             if (options.Animations) LoadClips(model, read, options.Clips, options.MainClipSetOnly);
             if (options.Animations && options.MainClipSetOnly && model.Animations.Count > 0) KeepLocatorSet(model, model.Animations[0].Name[0]);
+            ScaleCompensation.Apply(model); // after the node list is final (locators are expected last before this)
 
             var baked = SvMaterialBaker.Bake(model, read, engineMaps: true);
             Dictionary<string, byte[]> extra = null;

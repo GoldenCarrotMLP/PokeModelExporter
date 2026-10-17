@@ -247,7 +247,7 @@ switch (rest[0])
         break;
     }
 
-    case "glb": // glb <dex> [form] [gender] [--shiny] [--lods] [--no-anims] [--no-sidecar] [--hashes <list>] [--schemas <dir>] --out <file.glb>
+    case "glb": // glb <dex> [form] [gender] [--shiny] [--lods] [--no-anims] [--no-ssc] [--no-sidecar] [--hashes <list>] [--schemas <dir>] --out <file.glb>
     {
         int o = rest.IndexOf("--out");
         string outFile = Path.GetFullPath(o >= 0 ? rest[o + 1] : "model.glb");
@@ -257,6 +257,7 @@ switch (rest[0])
         string dir = folder;
         Func<string, byte[]> read = file => archive.Read(dir + file);
         if (!rest.Contains("--no-anims")) LoadClips(archive, model, dir, rest);
+        if (!rest.Contains("--no-ssc")) Console.Error.WriteLine($"scale compensation: {ScaleCompensation.Apply(model)} helper nodes");
         var folderFiles = FolderFiles(rest, folder);
 
         // Textures: plain maps decoded, layered materials (eyes, flames...) baked to color/emission;
@@ -391,6 +392,35 @@ switch (rest[0])
             }
             Console.WriteLine($"{i,3} {name,-28} parent {parent,3} rig {rig,3}{m}");
         }
+        break;
+    }
+
+    case "skeletons": // skeletons: every catalog model's segment-scale-compensate flags (trskl bones[].inherit_position)
+    {
+        var catalog = new SvCatalog(archive.Read(SvCatalog.Path));
+        var values = new Dictionary<int, int>();
+        int models = 0, mixed = 0, none = 0;
+        foreach (var path in catalog.Entries.Select(e => e.ModelPath).Distinct())
+        {
+            var mdlData = archive.Read(SvCatalog.DataRoot + path);
+            if (mdlData == null) continue;
+            string dir = SvCatalog.DataRoot + path.Substring(0, path.LastIndexOf('/') + 1);
+            var sklData = archive.Read(dir + FbTable.Root(mdlData).Table(2).String(0));
+            if (sklData == null) continue;
+            var bones = FbTable.Root(sklData).Vector(2);
+            int on = 0, off = 0;
+            for (int k = 0; k < bones.Length; k++)
+            {
+                int v = bones.Table(k).U8(0);
+                values[v] = values.TryGetValue(v, out int c) ? c + 1 : 1;
+                if (v != 0) on++; else off++;
+            }
+            models++;
+            if (on > 0 && off > 0) { mixed++; if (mixed <= 20) Console.WriteLine($"mixed {path}: {on} on, {off} off"); }
+            if (on == 0) { none++; if (none <= 20) Console.WriteLine($"all off {path} ({off} bones)"); }
+        }
+        Console.WriteLine($"{models} models: {models - mixed - none} all on, {mixed} mixed, {none} all off; values " +
+            string.Join(", ", values.OrderBy(kv => kv.Key).Select(kv => $"{kv.Key}: {kv.Value} bones")));
         break;
     }
 
