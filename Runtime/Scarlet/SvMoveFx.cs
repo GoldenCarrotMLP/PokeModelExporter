@@ -32,6 +32,7 @@ namespace PokeModelExporter.Scarlet
             ["UUUType"] = new[] { "NoUUU" },
             ["PokeAnimeState"] = new[] { "Poke1Ground", "Poke2Ground" },
             ["PokeRare"] = new[] { "Poke1NoRare" },
+            ["PlayerRide"] = new[] { "NoRide" }, // the Terastal cinematic: the trainer on foot (not riding Koraidon / Miraidon)
         };
 
         // Checked by the engine per use.
@@ -54,14 +55,22 @@ namespace PokeModelExporter.Scarlet
             type == "Title/Battle/CameraShakeFade" || type.StartsWith("Title/Battle/CompositionCamera", StringComparison.Ordinal) ||
             type == "Title/Battle/ResetBattleCamera" || type == "Title/Battle/AdjustScale" || type == "Title/Battle/AdjustScaleTarget" ||
             type == "Title/Battle/ResetPosition" || type == "Title/Battle/SetCenterPosition" || type == "Title/Battle/MigawariVisible" || type == "Title/Battle/TameVisible" ||
-            type == "Animation/SetTrigger" || type == "Animation/SetInt" || type == "Animation/SetMasterSpeed";
+            type == "Animation/SetTrigger" || type == "Animation/SetInt" || type == "Animation/SetMasterSpeed" ||
+            // The Terastal cinematic: camera cuts (.trcma, exported under "cameras"), the crystal skin and crown scale,
+            // the battle camera handed over for the sequence.
+            type == "CameraAnimation/Load" || type == "CameraAnimation/Play" || type == "Camera/SelectThis" ||
+            type == "Title/Battle/ChangeGem" || type == "Title/Battle/GemLightEnable" || type == "Title/Battle/GemSRT" ||
+            type == "Title/Battle/CameraControlEnable"; // (GaugeDispAll, the HUD, is in 705 moves: the stage hides the HUD itself)
 
         // timelines: file stem ("ew0085", "ew0024_1") -> .trtml bytes; sceneObjects: stem -> .trsot bytes (may lack some);
         // readParticles: archive path -> bytes (null when missing).
         public static string Export(int move, IReadOnlyDictionary<string, byte[]> timelines, IReadOnlyDictionary<string, byte[]> sceneObjects,
             Func<string, byte[]> readParticles, out int emitterCount, Action<string, string, int, int> onTexture = null,
-            Action<string, string, BfresPrimitives.Primitive> onPrimitive = null, string folder = null)
+            Action<string, string, BfresPrimitives.Primitive> onPrimitive = null, string folder = null,
+            IReadOnlyDictionary<string, IReadOnlyList<byte[]>> extraScenes = null, IReadOnlyDictionary<string, TrinityAnimationReader.CameraClip> cameras = null)
         {
+            // extraScenes: more scene files per timeline (the Terastal cinematic's per-type objects live in 19 more);
+            // cameras: camera cuts by file stem, written under "cameras".
             // The effect's folder and file stem: a move's (effect/battle_ew/ew0085) or a battle system effect's
             // (effect/battle_es/es008: stat up, heal...).
             folder ??= $"effect/battle_ew/ew{move:D4}";
@@ -80,6 +89,12 @@ namespace PokeModelExporter.Scarlet
                 var timeline = SvMoveTimeline.Read(kv.Value);
                 var objects = sceneObjects.TryGetValue(kv.Key, out var sot) ? SvSceneObjects.Read(sot) : new Dictionary<string, List<string>>();
                 var models = sot != null ? SvSceneObjects.Models(sot) : new Dictionary<string, string>();
+                if (extraScenes != null && extraScenes.TryGetValue(kv.Key, out var more))
+                    foreach (var extra in more)
+                    {
+                        foreach (var o in SvSceneObjects.Read(extra)) if (!objects.ContainsKey(o.Key)) objects[o.Key] = o.Value;
+                        foreach (var m in SvSceneObjects.Models(extra)) if (!models.ContainsKey(m.Key)) models[m.Key] = m.Value;
+                    }
                 // Every effect of the scene, also those no timeline object plays: the game starts some from code
                 // (Transform's start_charge / end_impact around the model swap).
                 foreach (var paths in objects.Values)
@@ -125,6 +140,24 @@ namespace PokeModelExporter.Scarlet
             }
             w.EndArray();
 
+            // Camera cuts: per key [frame, values...]; translation and aim (the look-at point) in metres, rotation as a
+            // quaternion x y z w, fov in radians. Local to the object the timeline attaches the camera to.
+            if (cameras != null && cameras.Count > 0)
+            {
+                w.Name("cameras").BeginObject();
+                foreach (var cam in cameras.OrderBy(c => c.Key, StringComparer.Ordinal))
+                {
+                    var c = cam.Value;
+                    w.Name(cam.Key).BeginObject().Name("frames").Value(c.FrameCount).Name("fps").Raw(N(c.FramesPerSecond));
+                    if (c.Translation != null) Track(w, "translation", c.Translation.Times, c.Translation.Values.Select(v => new[] { v.X, v.Y, v.Z }));
+                    if (c.Rotation != null) Track(w, "rotation", c.Rotation.Times, c.Rotation.Values.Select(q => new[] { q.X, q.Y, q.Z, q.W }));
+                    if (c.Fov != null) Track(w, "fov", c.Fov.Times, c.Fov.Values.Select(v => new[] { v }));
+                    if (c.Unknown3 != null) Track(w, "aim", c.Unknown3.Times, c.Unknown3.Values.Select(v => new[] { v.X, v.Y, v.Z }));
+                    w.EndObject();
+                }
+                w.EndObject();
+            }
+
             emitterCount = 0;
             w.Name("effects").BeginObject();
             foreach (var kv in effects)
@@ -147,6 +180,19 @@ namespace PokeModelExporter.Scarlet
             }
             w.EndObject().EndObject();
             return w.ToString();
+        }
+
+        static void Track(JsonWriter w, string name, float[] times, IEnumerable<float[]> values)
+        {
+            w.Name(name).BeginArray();
+            int i = 0;
+            foreach (var v in values)
+            {
+                w.BeginArray().Raw(N(times[i++]));
+                foreach (var x in v) w.Raw(N(x));
+                w.EndArray();
+            }
+            w.EndArray();
         }
 
         // Each texture an emitter (or its children) uses, with the flipbook grid it's cut into.

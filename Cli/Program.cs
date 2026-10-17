@@ -720,12 +720,19 @@ switch (rest[0])
             if (!byMove.TryGetValue(move, out var list)) byMove[move] = list = new List<string>();
             list.Add(path);
         }
+        // Terastallization (Docs/terastal-research.md), as -3001 (tera.json): the cinematic's timeline from demo/ with its
+        // shared scene objects, every type's (ej_transform_start00..17, 99) and its camera cuts.
+        const int Tera = -3001;
+        var teraTimeline = "demo/ej/ej_transform01/ej_transform01.trtml";
+        bool wantTera = only.Count == 0 || only.Contains(Tera);
+        if (wantTera) byMove[Tera] = new List<string> { teraTimeline };
         long total = 0;
         int files = 0, emitters = 0;
         var watch = System.Diagnostics.Stopwatch.StartNew();
         var textureSources = new SortedDictionary<string, (string path, int cx, int cy)>(StringComparer.Ordinal);
         var primitiveShapes = new SortedDictionary<string, FxPrimitiveShape>(StringComparer.Ordinal);
-        foreach (var kv in byMove)
+        // Terastallization last: textures and primitives keep the move files they were first analysed from.
+        foreach (var kv in byMove.OrderBy(k => k.Key == Tera ? 1 : 0).ThenBy(k => k.Key))
         {
             var timelines = new Dictionary<string, byte[]>();
             var scenes = new Dictionary<string, byte[]>();
@@ -745,13 +752,26 @@ switch (rest[0])
                 var first = scenes.OrderBy(k => k.Key, StringComparer.Ordinal).First().Value;
                 foreach (var stem in timelines.Keys) if (!scenes.ContainsKey(stem)) scenes[stem] = first;
             }
-            string folder = kv.Key <= -2000 ? $"effect/battle_etb/etb{-2000 - kv.Key:D3}"
+            Dictionary<string, IReadOnlyList<byte[]>> extraScenes = null;
+            Dictionary<string, TrinityAnimationReader.CameraClip> cameras = null;
+            if (kv.Key == Tera)
+            {
+                var start = new List<byte[]>();
+                foreach (var t in new[] { "" }.Concat(Enumerable.Range(0, 18).Select(i => i.ToString("D2"))).Append("99"))
+                    if (archive.Read($"effect/battle_ej/ej_transform_start{t}/ej_transform_start{t}_0.trsot") is byte[] sot) start.Add(sot);
+                extraScenes = new Dictionary<string, IReadOnlyList<byte[]>> { ["ej_transform01"] = start };
+                cameras = new Dictionary<string, TrinityAnimationReader.CameraClip>();
+                for (int c = 1; c <= 9; c++)
+                    if (archive.Read($"demo/ej/ej_transform01/ej_transform01_cam_c{c:D3}.trcma") is byte[] cma)
+                        cameras[$"ej_transform01_cam_c{c:D3}"] = TrinityAnimationReader.ReadCamera(cma);
+            }
+            string folder = kv.Key == Tera ? "demo/ej/ej_transform01" : kv.Key <= -2000 ? $"effect/battle_etb/etb{-2000 - kv.Key:D3}"
                 : kv.Key <= -1000 ? $"effect/battle_ee/ee{-1000 - kv.Key:D3}" : kv.Key < 0 ? $"effect/battle_es/es{-kv.Key:D3}" : null;
             string json = SvMoveFx.Export(kv.Key, timelines, scenes, archive.Read, out int count,
                 (path, name, cx, cy) => { if (!textureSources.ContainsKey(name)) textureSources[name] = (path, cx, cy); },
                 (path, name, prim) => { if (!primitiveShapes.ContainsKey(name)) { var shape = FxPrimitiveShape.Analyze(prim); shape.Source = path; primitiveShapes[name] = shape; } },
-                folder);
-            string file = Path.Combine(outDir, kv.Key <= -2000 ? $"etb{-2000 - kv.Key:D3}.json"
+                folder, extraScenes, cameras);
+            string file = Path.Combine(outDir, kv.Key == Tera ? "tera.json" : kv.Key <= -2000 ? $"etb{-2000 - kv.Key:D3}.json"
                 : kv.Key <= -1000 ? $"ee{-1000 - kv.Key:D3}.json" : kv.Key < 0 ? $"es{-kv.Key:D3}.json" : $"{kv.Key:D4}.json");
             File.WriteAllText(file, json);
             total += json.Length; files++; emitters += count;
