@@ -89,6 +89,16 @@ namespace PokeModelExporter.Formats
             }
         }
 
+        // An enum value's number by its name (e.g. a DevID "DEV_PIKATYUU" -> 25), from any enum of the schema.
+        public bool TryEnumNumber(string valueName, out long number)
+        {
+            foreach (var e in _enums)
+                foreach (var kv in e.Names)
+                    if (kv.Value == valueName) { number = kv.Key; return true; }
+            number = 0;
+            return false;
+        }
+
         // The data's root table as plain objects (see the class comment); null without a root type.
         public object Decode(byte[] data) => _root < 0 || data == null || data.Length < 8 ? null : Table(data, (int)ReadU32(data, 0), _root);
 
@@ -220,7 +230,8 @@ namespace PokeModelExporter.Formats
                 case Base.UInt: v = (long)ReadU32(b, at); break;
                 case Base.Long: v = BitConverter.ToInt64(b, at); break;
                 case Base.ULong: v = (long)BitConverter.ToUInt64(b, at); break;
-                case Base.Float: return (double)BitConverter.ToSingle(b, at);
+                // A float as its shortest exact decimal (0.01, not 0.009999999776...).
+                case Base.Float: return double.Parse(BitConverter.ToSingle(b, at).ToString("R", CultureInfo.InvariantCulture), CultureInfo.InvariantCulture);
                 case Base.Double: return BitConverter.ToDouble(b, at);
                 default: return null;
             }

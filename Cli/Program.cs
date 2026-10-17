@@ -489,6 +489,45 @@ switch (rest[0])
         break;
     }
 
+    case "behaviour": // behaviour --hashes <list> --dex <dex.json> --out <dir>: the overworld AI in PokeSim's behaviour format (SvBehaviourImport)
+    {
+        int h = rest.IndexOf("--hashes"), dx = rest.IndexOf("--dex"), o = rest.IndexOf("--out");
+        if (h < 0 || dx < 0 || o < 0) { Console.Error.WriteLine("behaviour --hashes <list> --dex <dex.json> --out <dir>"); return 1; }
+        var names = File.ReadLines(rest[h + 1]).Select(l => l.Split(' ')).Where(p => p.Length >= 2).Select(p => p[1].Trim())
+            .Where(n => n.StartsWith("world/data/pokemon/", StringComparison.Ordinal)).ToList();
+        // Showdown ids by (national dex, forme index) from PokeSim's dex.json.
+        var ids = new Dictionary<(int, int), string>();
+        using (var doc = System.Text.Json.JsonDocument.Parse(File.ReadAllText(rest[dx + 1])))
+            foreach (var sp in doc.RootElement.GetProperty("species").EnumerateObject())
+            {
+                int num = sp.Value.TryGetProperty("num", out var n) ? n.GetInt32() : 0;
+                int forme = sp.Value.TryGetProperty("formeIndex", out var fi) ? fi.GetInt32() : 0;
+                if (num > 0 && !ids.ContainsKey((num, forme))) ids[(num, forme)] = sp.Name;
+            }
+        // The game's internal species numbers -> national dex, from its own personal table.
+        var personal = new SvPersonal(archive.Read(SvPersonal.Path));
+        var nationalOf = new Dictionary<int, int>();
+        for (int national = 1; national <= 1025; national++)
+        {
+            int internalNo = personal.CatalogSpecies(national, 0);
+            if (internalNo > 0 && !nationalOf.ContainsKey(internalNo)) nationalOf[internalNo] = national;
+        }
+        var import = new SvBehaviourImport(archive.Read, names,
+            (national, form) => ids.TryGetValue((national, form), out var id) ? id : form != 0 && ids.TryGetValue((national, 0), out var baseId) ? baseId + "-form" + form : null,
+            internalNo => nationalOf.TryGetValue(internalNo, out int nat) ? nat : 0);
+        import.Run();
+        string outDir = Path.GetFullPath(rest[o + 1]);
+        foreach (var kv in import.Files)
+        {
+            string file = Path.Combine(outDir, kv.Key.Replace('/', Path.DirectorySeparatorChar));
+            Directory.CreateDirectory(Path.GetDirectoryName(file));
+            File.WriteAllText(file, BfbsSchema.ToJson(kv.Value) + "\n");
+        }
+        foreach (var line in import.Log) Console.WriteLine(line);
+        Console.WriteLine($"{import.Files.Count} files -> {outDir}");
+        break;
+    }
+
     case "rootmotion": // rootmotion <national dex> [--clip part]: bones near the skeleton's top whose translation travels over a clip
     {
         var model = LoadModelFrom(archive, rest, out string folder);
