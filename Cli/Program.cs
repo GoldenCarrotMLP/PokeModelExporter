@@ -38,11 +38,12 @@ if (rest[0] == "texture") // texture <file.bntx> <out.png> [--normal]: decode a 
     return 0;
 }
 
-if (rest[0] == "audio") // audio <bank> <EVENT_NAME>... --out <dir> [--switch INDEX,FORM00] [--vgmstream <vgmstream-cli.exe>]: an event's sounds as .wem (+ .wav)
+if (rest[0] == "audio") // audio <bank> <EVENT_NAME>... --out <dir> [--switch INDEX,FORM00] [--variant N] [--vgmstream <vgmstream-cli.exe>]: an event's sounds as .wem (+ .wav)
 {
     string folder = PokeModelExporter.Wwise.WwiseSounds.FindFolder(gameFolder);
     if (folder == null) { Console.Error.WriteLine($"No audio/wwise/bin/Switch/Init.bnk under {gameFolder}"); return 1; }
-    int o = rest.IndexOf("--out"), v = rest.IndexOf("--vgmstream"), sw = rest.IndexOf("--switch");
+    int o = rest.IndexOf("--out"), v = rest.IndexOf("--vgmstream"), sw = rest.IndexOf("--switch"), vr = rest.IndexOf("--variant");
+    int variant = vr >= 0 ? int.Parse(rest[vr + 1]) : 0;
     var switches = sw >= 0 ? rest[sw + 1].Split(',') : new string[0];
     string outDir = Path.GetFullPath(o >= 0 ? rest[o + 1] : "audio");
     Directory.CreateDirectory(outDir);
@@ -50,8 +51,8 @@ if (rest[0] == "audio") // audio <bank> <EVENT_NAME>... --out <dir> [--switch IN
     var watch = System.Diagnostics.Stopwatch.StartNew();
     for (int i = 2; i < rest.Count && !rest[i].StartsWith("--"); i++)
     {
-        var media = sounds.Resolve(rest[1], rest[i], switches);
-        Console.WriteLine($"{rest[i]} (id {PokeModelExporter.Wwise.WwiseSounds.Hash(rest[i])}): {media.Count} sound(s)");
+        var media = sounds.Resolve(rest[1], rest[i], variant, out int variants, switches);
+        Console.WriteLine($"{rest[i]} (id {PokeModelExporter.Wwise.WwiseSounds.Hash(rest[i])}): {media.Count} sound(s), variant {variant} of {variants}");
         foreach (var m in media)
         {
             string wem = Path.Combine(outDir, $"{rest[i]}_{m.Id}.wem");

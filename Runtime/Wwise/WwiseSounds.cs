@@ -14,7 +14,8 @@ namespace PokeModelExporter.Wwise
     // Events are found by name: Wwise IDs are the FNV-1 32-bit hash of the lowercase name.
     // Play targets may be sounds or switch containers (a game variable picks the child: SV's cries
     // PLAY_PV_<internal species> switch on voice type INDEX/ATK/SPATK/SAD/GLAD1..., some first on
-    // FORM00..); random/sequence containers resolve to nothing for now.
+    // FORM00..), random/sequence containers (one child per play: footsteps, whooshes; pick it with variant) and layer
+    // containers (every child at once).
     public sealed class WwiseSounds
     {
         readonly string _folder;
@@ -49,9 +50,17 @@ namespace PokeModelExporter.Wwise
         // The media an event plays (several when it layers sounds), empty when it can't be resolved.
         // switches: preferred switch values, by name, in order (e.g. "INDEX", "FORM00"); a switch
         // container with none of them plays its first entry.
-        public IReadOnlyList<Media> Resolve(string bankName, string eventName, params string[] switches)
+        public IReadOnlyList<Media> Resolve(string bankName, string eventName, params string[] switches) =>
+            Resolve(bankName, eventName, 0, out _, switches);
+
+        // variant: which child a random/sequence container plays (modulo its count); variants: the most children any of
+        // them had (1 without one), so variant 0..variants-1 covers every take.
+        public IReadOnlyList<Media> Resolve(string bankName, string eventName, int variant, out int variants, params string[] switches)
         {
             var wanted = switches.Select(Hash).ToArray();
+            _variant = Math.Max(0, variant);
+            _variants = 1;
+            variants = 1;
             var bank = LoadBank(bankName);
             var result = new List<Media>();
             if (bank == null || !bank.Objects.TryGetValue(Hash(eventName), out var ev) || ev.Type != 4) return result;
@@ -65,8 +74,11 @@ namespace PokeModelExporter.Wwise
                 uint target = a.U32();
                 if (type == 0x0403) Collect(bank, target, wanted, result, 0); // Play
             }
+            variants = _variants;
             return result;
         }
+
+        int _variant, _variants; // the Resolve in progress (callers hold one lock: GameSounds)
 
         void Collect(Bank bank, uint id, uint[] wanted, List<Media> result, int depth)
         {
@@ -90,6 +102,61 @@ namespace PokeModelExporter.Wwise
                 }
                 foreach (uint child in pick.Children) Collect(bank, child, wanted, result, depth + 1);
             }
+            else if (obj.Type == 5 && Playlist(bank, obj) is uint[] takes && takes.Length > 0)
+            {
+                _variants = Math.Max(_variants, takes.Length);
+                Collect(bank, takes[_variant % takes.Length], wanted, result, depth + 1);
+            }
+            else if (obj.Type == 9 && LayerChildren(bank, obj, id) is uint[] layers)
+                foreach (uint child in layers) Collect(bank, child, wanted, result, depth + 1);
+        }
+
+        // A random/sequence container's playlist: it ends the object, a 16-bit count N then N { child ID, weight }, right
+        // after the child list (count, IDs). Found by that exact fit, like SwitchList.
+        static uint[] Playlist(Bank bank, (byte Type, int Offset, int Length) obj)
+        {
+            var d = bank.Data;
+            int end = obj.Offset + obj.Length;
+            for (int k = obj.Offset + 4; k + 4 <= end; k++)
+            {
+                uint n = BitConverter.ToUInt32(d, k);
+                if (n == 0 || n > 256 || k + 4 + 4L * n + 2 > end) continue;
+                int q = k + 4 + 4 * (int)n;
+                ushort m = BitConverter.ToUInt16(d, q);
+                if (q + 2 + 8L * m != end) continue;
+                bool ok = true;
+                for (int c = 0; c < n && ok; c++) ok = bank.Objects.ContainsKey(BitConverter.ToUInt32(d, k + 4 + 4 * c));
+                var list = new uint[m];
+                for (int c = 0; c < m && ok; c++)
+                {
+                    list[c] = BitConverter.ToUInt32(d, q + 2 + 8 * c);
+                    ok = bank.Objects.ContainsKey(list[c]);
+                }
+                if (ok) return m > 0 ? list : Enumerable.Range(0, (int)n).Select(c => BitConverter.ToUInt32(d, k + 4 + 4 * c)).ToArray();
+            }
+            return null;
+        }
+
+        // A layer container's children: the first list (count, IDs) whose IDs are all sounds or containers of this bank
+        // other than itself, after the node's parent field. Each layer then plays every child at once.
+        static uint[] LayerChildren(Bank bank, (byte Type, int Offset, int Length) obj, uint self)
+        {
+            var d = bank.Data;
+            int end = obj.Offset + obj.Length;
+            for (int k = obj.Offset + 13; k + 4 <= end; k++)
+            {
+                uint n = BitConverter.ToUInt32(d, k);
+                if (n == 0 || n > 64 || k + 4 + 4L * n > end) continue;
+                var ids = new uint[n];
+                bool ok = true;
+                for (int c = 0; c < n && ok; c++)
+                {
+                    ids[c] = BitConverter.ToUInt32(d, k + 4 + 4 * c);
+                    ok = ids[c] != self && bank.Objects.TryGetValue(ids[c], out var child) && (child.Type == 2 || child.Type == 5 || child.Type == 6 || child.Type == 9);
+                }
+                if (ok && ids.Distinct().Count() == ids.Length) return ids;
+            }
+            return null;
         }
 
         // A switch container's switch -> children list. It follows variable-length node parameters, so it's
