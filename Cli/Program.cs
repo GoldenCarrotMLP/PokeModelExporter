@@ -438,6 +438,27 @@ switch (rest[0])
         break;
     }
 
+    case "rootmotion": // rootmotion <national dex> [--clip part]: bones near the skeleton's top whose translation travels over a clip
+    {
+        var model = LoadModelFrom(archive, rest, out string folder);
+        LoadClips(archive, model, folder, rest);
+        int Depth(int i) { int d = 0; while (i >= 0 && model.Nodes[i].Parent >= 0) { i = model.Nodes[i].Parent; d++; } return d; }
+        var depth = model.Nodes.Select((n, i) => (n.Name, d: Depth(i))).GroupBy(x => x.Name).ToDictionary(g => g.Key, g => g.First().d);
+        foreach (var anim in model.Animations)
+        {
+            Console.WriteLine($"{anim.Name}  ({anim.FrameCount} frames, {anim.Duration:0.00} s){(anim.RootSpeed > 0 ? $", root motion {anim.RootSpeed:0.00}/s pinned" : "")}");
+            foreach (var t in anim.Tracks.Where(t => t.Translation != null && t.Translation.Values.Length > 1 && depth.TryGetValue(t.Bone, out int d) && d <= 4))
+            {
+                var v = t.Translation.Values;
+                var move = v[v.Length - 1] - v[0];
+                float span = v.Max(p => (p - v[0]).Length());
+                if (span < 0.01f) continue;
+                Console.WriteLine($"   {t.Bone,-20} depth {depth[t.Bone]}  first {v[0]:0.000}  last {v[v.Length - 1]:0.000}  travel {move.Length():0.000}  max {span:0.000}");
+            }
+        }
+        break;
+    }
+
     case "fxmodel": // fxmodel <model path in the archive> --out <file.glb>: a move's effect model (Earthquake's rocks...)
     {
         int o = rest.IndexOf("--out");

@@ -250,12 +250,34 @@ namespace PokeModelExporter.Scarlet
                 if (traef != null) anim.Events = TrinityAnimationReader.ReadEvents(traef);
                 var tracm = read(Path.ChangeExtension(file, ".tracm"));
                 if (tracm != null) TrinityCurveReader.Read(tracm, anim);
+                PinRootMotion(anim);
                 model.Animations.Add(anim);
             }
             var idle = model.Animations.FirstOrDefault(a => a.Name.Contains("battlewait")) ?? model.Animations.FirstOrDefault(a => a.Name.Contains("defaultwait"));
             if (idle != null)
                 foreach (var v in idle.VisibilityTracks.Where(v => v.Fixed == false))
                     foreach (var mesh in model.Meshes.Where(m => m.Name == v.Mesh)) mesh.Hidden = true;
+        }
+
+        // Walking and running loops carry the Pokemon forward on the skeleton's "origin" bone (Pikachu's walk 0.6 per
+        // second), then the loop jumps back. Whoever plays them moves the Pokemon itself, so the bone stays in place over
+        // the ground and the speed is kept (RootSpeed) to match the clip's pace to the real movement. Loops only: attack
+        // clips that lunge and come back keep their motion.
+        public static void PinRootMotion(AnimationData anim)
+        {
+            if (!anim.Loop) return;
+            var track = anim.Tracks.FirstOrDefault(t => t.Bone == "origin" && t.Translation != null && t.Translation.Values.Length > 1);
+            if (track == null) return;
+            var keys = track.Translation;
+            var first = keys.Values[0];
+            var last = keys.Values[keys.Values.Length - 1];
+            float dx = last.X - first.X, dz = last.Z - first.Z;
+            float travel = (float)Math.Sqrt(dx * dx + dz * dz);
+            if (travel < 1e-3f) return;
+            for (int i = 0; i < keys.Values.Length; i++) keys.Values[i] = new System.Numerics.Vector3(first.X, keys.Values[i].Y, first.Z);
+            float fps = anim.FramesPerSecond > 0 ? anim.FramesPerSecond : 30;
+            float seconds = (keys.Times[keys.Times.Length - 1] - keys.Times[0]) / fps;
+            if (seconds > 0) anim.RootSpeed = travel / seconds;
         }
 
         // Locator sets match the clip sets (00000 standing, 10000 swimming, 20000 floating/flying): the same names at
@@ -337,7 +359,8 @@ namespace PokeModelExporter.Scarlet
 
     // A compact JSON description of what a game needs to drive the model beyond glTF:
     //   { species, form, gender, shiny, size, locators: [names], hiddenMeshes: [names],
-    //     clips: { name: { duration, loop, events: [{type, time, duration, params}],
+    //     clips: { name: { duration, loop, rootSpeed (walk/run loops: their pinned root motion, model units/s),
+    //                      events: [{type, time, duration, params}],
     //                      visibility: [{mesh, visible} | {mesh, keys: [[t, bool]]}],
     //                      material: [{mesh, material, parameter, r|g|b|a: [[t, v]]}] } } }
     // Times in seconds.
@@ -363,6 +386,7 @@ namespace PokeModelExporter.Scarlet
                 float fps = a.FramesPerSecond > 0 ? a.FramesPerSecond : 30;
                 w.Name(a.Name).BeginObject();
                 w.Name("duration").Value(a.Duration).Name("loop").Value(a.Loop);
+                if (a.RootSpeed > 0) w.Name("rootSpeed").Value(a.RootSpeed);
                 w.Name("events").BeginArray();
                 foreach (var e in a.Events)
                 {
