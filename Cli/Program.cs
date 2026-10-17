@@ -197,12 +197,12 @@ switch (rest[0])
         break;
     }
 
-    case "personal": // personal: every species/form of the game's personal table (raw fields for research), tab-separated
+    case "personal": // personal [national]: every species/form of the game's personal table (raw fields for research), tab-separated
     {
         var entries = FbTable.Root(archive.Read(SvPersonal.Path)).Vector(0);
         var catalog = new SvCatalog(archive.Read(SvCatalog.Path));
         var models = new HashSet<(int, int)>(catalog.Entries.Select(c => (c.Species, c.Form)));
-        Console.WriteLine("national	form	internal	present	model	stats	f3..f9 (u8)");
+        Console.WriteLine("national	form	internal	present	model	stats	field:u8/u16 for f3..f32");
         for (int i = 0; i < entries.Length; i++)
         {
             var e = entries.Table(i);
@@ -210,9 +210,14 @@ switch (rest[0])
             if (p == 0) continue;
             var b = e.Buffer;
             int index = BitConverter.ToUInt16(b, p), form = BitConverter.ToUInt16(b, p + 2), national = BitConverter.ToUInt16(b, p + 4);
+            if (rest.Count > 1 && rest[1] != national.ToString()) continue;
+            if (rest.Count > 1) // personal <national>: each field's position and its first 8 bytes
+                for (int f = 0; f < 40; f++)
+                    if (e.FieldPosition(f) is int fp && fp != 0)
+                        Console.WriteLine($"  form {form} field {f} @ {fp}: {BitConverter.ToString(b, fp, Math.Min(8, b.Length - fp))}");
             int s = e.FieldPosition(22);
             string stats = s == 0 ? "-" : string.Join("/", Enumerable.Range(0, 6).Select(k => b[s + k]));
-            string raw = string.Join(" ", Enumerable.Range(3, 7).Select(f => e.FieldPosition(f) == 0 ? "-" : e.U8(f).ToString()));
+            string raw = string.Join(" ", Enumerable.Range(3, 30).Select(f => e.FieldPosition(f) == 0 ? $"{f}:-" : $"{f}:{e.U8(f)}/{e.U16(f)}"));
             Console.WriteLine($"{national}	{form}	{index}	{(e.Bool(1) ? 1 : 0)}	{(models.Contains((index, form)) ? 1 : 0)}	{stats}	{raw}");
         }
         break;

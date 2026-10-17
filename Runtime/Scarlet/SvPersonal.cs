@@ -16,6 +16,11 @@ namespace PokeModelExporter.Scarlet
         public const string Path = "avalon/data/personal_array.bin";
         const int StatsField = 22; // StatInfo hp/atk/def/spa/spd/spe (bytes); the schema's slot count is off by two
         const int Type1Field = 5, Type2Field = 6; // also two past the schema's type1 / type2 (checked against Showdown)
+        // Also two past the schema (its growth / rate), checked against the known values of every species (PokeSim's
+        // StoryFacts compares them with PokeAPI's): EXP group = the row of avalon/data/growTable.bin (0 Medium Fast,
+        // 1 Erratic, 2 Fluctuating, 3 Medium Slow, 4 Fast, 5 Slow), and the catch rate (Pikachu 190, Mewtwo 3).
+        // Absent = 0. The schema's base_exp slot (field 18) holds something else; the game has no base EXP yields here.
+        const int GrowthField = 10, CatchRateField = 11;
 
         // The game's type numbers.
         public static readonly string[] TypeNames =
@@ -29,6 +34,7 @@ namespace PokeModelExporter.Scarlet
         readonly HashSet<(int national, int form)> _present = new HashSet<(int, int)>();
         readonly Dictionary<(int national, int form), string[]> _types = new Dictionary<(int, int), string[]>();
         readonly Dictionary<int, List<int>> _forms = new Dictionary<int, List<int>>();
+        readonly Dictionary<(int national, int form), (int growth, int catchRate)> _story = new Dictionary<(int, int), (int, int)>();
 
         public SvPersonal(byte[] data)
         {
@@ -45,6 +51,7 @@ namespace PokeModelExporter.Scarlet
                 int s = e.FieldPosition(StatsField);
                 if (s != 0 && !_stats.ContainsKey(key)) _stats[key] = new int[] { b[s], b[s + 1], b[s + 2], b[s + 3], b[s + 4], b[s + 5] };
                 if (e.Bool(1)) _present.Add(key);
+                if (!_story.ContainsKey(key)) _story[key] = (e.U8(GrowthField), e.U8(CatchRateField));
                 if (!_types.ContainsKey(key))
                 {
                     int t1 = e.U8(Type1Field), t2 = e.U8(Type2Field); // absent = 0 = Normal
@@ -72,6 +79,12 @@ namespace PokeModelExporter.Scarlet
 
         // Every form number the table lists for a National Dex number.
         public IReadOnlyList<int> Forms(int national) => _forms.TryGetValue(national, out var f) ? f : (IReadOnlyList<int>)System.Array.Empty<int>();
+
+        // The EXP group (a row of growTable.bin, see GrowthField) for a National Dex number and form, or -1.
+        public int GrowthRate(int national, int form = 0) => _story.TryGetValue((national, form), out var v) ? v.growth : -1;
+
+        // The catch rate (1-255) for a National Dex number and form, or 0 when the table has none.
+        public int CatchRate(int national, int form = 0) => _story.TryGetValue((national, form), out var v) ? v.catchRate : 0;
 
         // Whether the species/form can appear in this game (is_present).
         public bool IsPresent(int national, int form = 0) => _present.Contains((national, form));
