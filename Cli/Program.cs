@@ -438,6 +438,57 @@ switch (rest[0])
         break;
     }
 
+    case "dump": // dump --hashes <hashes_inside_fd.txt> --out <dir> [path prefix...]: every data table with a .bfbs schema next to
+                 // it, decoded to JSON (<dir>/<path>.json) beside the raw files, and <dir>/index.json (path, schema root, sizes)
+    {
+        int h = rest.IndexOf("--hashes"), o = rest.IndexOf("--out");
+        if (h < 0 || o < 0) { Console.Error.WriteLine("dump --hashes <list> --out <dir> [prefix...]"); return 1; }
+        string outDir = Path.GetFullPath(rest[o + 1]);
+        var prefixes = rest.Where((a, i) => i > 0 && i != h && i != h + 1 && i != o && i != o + 1).ToList();
+        var names = File.ReadLines(rest[h + 1]).Select(l => l.Split(' ')).Where(p => p.Length >= 2).Select(p => p[1].Trim())
+            .Where(n => prefixes.Count == 0 || prefixes.Any(n.StartsWith)).ToList();
+        // Data files: the same path as a schema but another extension (mostly .bin).
+        var byStem = names.GroupBy(n => n.Substring(0, n.Length - Path.GetExtension(n).Length)).ToDictionary(g => g.Key, g => g.ToList());
+        var index = new List<object>();
+        int schemas = 0, decoded = 0, failed = 0;
+        long bytes = 0;
+        foreach (var bfbsPath in names.Where(n => n.EndsWith(".bfbs", StringComparison.Ordinal)))
+        {
+            var bfbs = archive.Read(bfbsPath);
+            if (bfbs == null) continue;
+            schemas++;
+            string stem = bfbsPath.Substring(0, bfbsPath.Length - 5);
+            BfbsSchema schema;
+            try { schema = new BfbsSchema(bfbs); }
+            catch (Exception e) { Console.Error.WriteLine($"schema {bfbsPath}: {e.Message}"); failed++; continue; }
+            void Save(string path, byte[] data)
+            {
+                string file = Path.Combine(outDir, path.Replace('/', Path.DirectorySeparatorChar));
+                Directory.CreateDirectory(Path.GetDirectoryName(file));
+                File.WriteAllBytes(file, data);
+                bytes += data.Length;
+            }
+            Save(bfbsPath, bfbs);
+            foreach (var dataPath in byStem.TryGetValue(stem, out var siblings) ? siblings.Where(s => s != bfbsPath) : Enumerable.Empty<string>())
+            {
+                var data = archive.Read(dataPath);
+                if (data == null) continue;
+                Save(dataPath, data);
+                string json;
+                try { json = BfbsSchema.ToJson(schema.Decode(data)); }
+                catch (Exception e) { Console.Error.WriteLine($"decode {dataPath}: {e.Message}"); failed++; continue; }
+                Save(dataPath + ".json", System.Text.Encoding.UTF8.GetBytes(json));
+                decoded++;
+                index.Add(new Dictionary<string, object> { ["path"] = dataPath, ["schema"] = schema.RootName ?? "", ["bytes"] = (long)data.Length, ["json"] = (long)json.Length });
+            }
+            if (schemas % 500 == 0) Console.WriteLine($"  {schemas} schemas, {decoded} decoded...");
+        }
+        Directory.CreateDirectory(outDir);
+        File.WriteAllText(Path.Combine(outDir, "index.json"), BfbsSchema.ToJson(index));
+        Console.WriteLine($"{schemas} schemas, {decoded} files decoded, {failed} failed, {bytes / 1048576.0:0.0} MB -> {outDir}");
+        break;
+    }
+
     case "rootmotion": // rootmotion <national dex> [--clip part]: bones near the skeleton's top whose translation travels over a clip
     {
         var model = LoadModelFrom(archive, rest, out string folder);
