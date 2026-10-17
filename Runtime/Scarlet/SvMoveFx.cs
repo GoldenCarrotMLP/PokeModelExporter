@@ -305,6 +305,11 @@ namespace PokeModelExporter.Scarlet
             else if (e.AttributeData.TryGetValue("EP03", out var ep03) && ep03.Length > 6) w.Name("stripe").BeginArray().Value(3).Raw(N(ep03[6])).EndArray();
             // EP04: drawn in front of the camera (Blizzard's white-out, Tera Blast's screen fire): distance = -float 10.
             if (e.AttributeData.TryGetValue("EP04", out var ep04) && ep04.Length > 10) w.Name("camera").Raw(N(Math.Abs(ep04[10])));
+            // FSPN (spin field): particles turn around the emitter's axis (int at 4: 0 X, 1 Y, 2 Z) at radians per frame (0)
+            // and drift outward per frame (8); keyed curves follow (count at 24 and 172, then { x, y, z, time } keys), not
+            // used yet. Confusion's chicks: 0.026 rad/frame around Y.
+            if (e.AttributeData.TryGetValue("FSPN", out var fspn) && fspn.Length >= 3 && (fspn[0] != 0 || fspn[2] != 0))
+                w.Name("spinField").BeginArray().Raw(N(fspn[0])).Value(BitConverter.SingleToInt32Bits(fspn[1])).Raw(N(fspn[2])).EndArray();
             if (e.AttributeData.TryGetValue("CSDP", out var csdp) && csdp.Length >= 20)
                 w.Name("csdp").BeginArray().Raw(N(csdp[12])).Raw(N(csdp[13])).Raw(N(csdp[16])).Raw(N(csdp[17])).Raw(N(csdp[18])).Raw(N(csdp[19]))
                     .Raw(N(csdp[14])).Raw(N(csdp[15])).EndArray(); // then 56, 60: shader set 2's lit-texture weight and its offset
