@@ -41,6 +41,56 @@ namespace PokeModelExporter.Scarlet
             return anim;
         }
 
+        // A camera animation (.trcma, PokeDocs SV/Flatbuffers/animation/trcma.fbs: the Terastal cinematic's cuts):
+        // TRCMA { info { res, duration, framerate }, anim { name, anim1 { clip start, clip end, fov: float tracks },
+        // anim2 { rotation, translation, unk2, unk3: vector tracks, unk4: float track } } }. Times in frames.
+        public sealed class CameraClip
+        {
+            public string Name;
+            public int FrameCount;
+            public float FramesPerSecond;
+            public Keys<Vector3> Translation, Unknown2, Unknown3;
+            public Keys<Quaternion> Rotation;
+            public Keys<float> ClipStart, ClipEnd, Fov, Unknown4;
+        }
+
+        public static CameraClip ReadCamera(byte[] data)
+        {
+            var root = FbTable.Root(data);
+            var info = root.Table(0);
+            var anim = root.Table(1);
+            var a1 = anim.Table(1);
+            var a2 = anim.Table(2);
+            return new CameraClip
+            {
+                Name = anim.String(0),
+                FrameCount = (int)info.U32(1),
+                FramesPerSecond = info.U32(2) > 0 ? info.U32(2) : 30,
+                ClipStart = a1.IsNull ? null : FloatTrack(a1, 0),
+                ClipEnd = a1.IsNull ? null : FloatTrack(a1, 2),
+                Fov = a1.IsNull ? null : FloatTrack(a1, 4),
+                Rotation = a2.IsNull ? null : RotationTrack(a2, 0),
+                Translation = a2.IsNull ? null : VectorTrack(a2, 2),
+                Unknown2 = a2.IsNull ? null : VectorTrack(a2, 4),
+                Unknown3 = a2.IsNull ? null : VectorTrack(a2, 6),
+                Unknown4 = a2.IsNull ? null : FloatTrack(a2, 8),
+            };
+        }
+
+        static Keys<float> FloatTrack(FbTable track, int typeField)
+        {
+            int type = track.U8(typeField);
+            if (type == 0) return null;
+            var t = track.Table(typeField + 1);
+            if (t.IsNull) return null;
+            if (type == 1) return new Keys<float> { Times = new[] { 0f }, Values = new[] { t.F32(0) } };
+            var values = t.Vector(type == 2 ? 0 : 1);
+            var result = new Keys<float> { Values = new float[values.Length] };
+            for (int i = 0; i < values.Length; i++) result.Values[i] = values.F32(i);
+            result.Times = Times(t, type, values.Length);
+            return Increasing(result);
+        }
+
         // Union at field typeField (type) / typeField + 1 (value). Types: 1 Fixed, 2 Dynamic, 3 Framed16, 4 Framed8.
         static Keys<Vector3> VectorTrack(FbTable track, int typeField)
         {

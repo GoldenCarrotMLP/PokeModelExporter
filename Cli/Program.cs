@@ -396,6 +396,26 @@ switch (rest[0])
         break;
     }
 
+    case "camera": // camera <.trcma path in the archive> [--every N]: a camera animation's tracks (Terastal cinematic cuts)
+    {
+        var data = archive.Read(rest[1]);
+        if (data == null) { Console.Error.WriteLine("not found: " + rest[1]); return 1; }
+        var cam = TrinityAnimationReader.ReadCamera(data);
+        int ev = rest.IndexOf("--every");
+        int every = ev >= 0 ? int.Parse(rest[ev + 1]) : 10;
+        Console.WriteLine($"{rest[1]}: '{cam.Name}' {cam.FrameCount} frames at {cam.FramesPerSecond} fps");
+        string K<T>(string label, Keys<T> k) => k == null ? $"  {label}: -" : $"  {label}: {k.Values.Length} keys";
+        Console.WriteLine(K("translation", cam.Translation) + K("rotation", cam.Rotation) + K("fov", cam.Fov) + K("clip", cam.ClipStart) + K("unk2", cam.Unknown2) + K("unk3", cam.Unknown3) + K("unk4", cam.Unknown4));
+        T At<T>(Keys<T> k, float f) { if (k == null) return default; int i = 0; while (i + 1 < k.Times.Length && k.Times[i + 1] <= f) i++; return k.Values[i]; }
+        for (int f = 0; f <= cam.FrameCount; f += every)
+        {
+            var q = At(cam.Rotation, f);
+            var e = q == default ? System.Numerics.Vector3.Zero : QuatToEuler(q);
+            Console.WriteLine($"  {f,4}  pos {At(cam.Translation, f)}  rot(deg xyz) ({e.X:0.0}, {e.Y:0.0}, {e.Z:0.0})  fov {At(cam.Fov, f):0.###}  unk2 {At(cam.Unknown2, f)}  unk3 {At(cam.Unknown3, f)}  unk4 {At(cam.Unknown4, f):0.###}");
+        }
+        break;
+    }
+
     case "skeletons": // skeletons: every catalog model's segment-scale-compensate flags (trskl bones[].inherit_position)
     {
         var catalog = new SvCatalog(archive.Read(SvCatalog.Path));
@@ -919,6 +939,16 @@ switch (rest[0])
         return 1;
 }
 return 0;
+
+// Degrees about X, Y, Z (applied X first) for printing.
+static System.Numerics.Vector3 QuatToEuler(System.Numerics.Quaternion q)
+{
+    double sinx = 2 * (q.W * q.X + q.Y * q.Z), cosx = 1 - 2 * (q.X * q.X + q.Y * q.Y);
+    double siny = Math.Clamp(2 * (q.W * q.Y - q.Z * q.X), -1, 1);
+    double sinz = 2 * (q.W * q.Z + q.X * q.Y), cosz = 1 - 2 * (q.Y * q.Y + q.Z * q.Z);
+    const double d = 180 / Math.PI;
+    return new System.Numerics.Vector3((float)(Math.Atan2(sinx, cosx) * d), (float)(Math.Asin(siny) * d), (float)(Math.Atan2(sinz, cosz) * d));
+}
 
 static ModelData LoadModel(TrinityArchive archive, List<string> rest) => LoadModelFrom(archive, rest, out _);
 
