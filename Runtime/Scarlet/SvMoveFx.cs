@@ -215,13 +215,33 @@ namespace PokeModelExporter.Scarlet
             foreach (var c in e.Children) ReportPrimitives(c, file, path, onPrimitive);
         }
 
+        // A program decoded by hand is recognized by its operation sequence (opcode, constant-buffer slots and literal
+        // constants of each line before the output stage, registers ignored), hashed: only an exact match uses the
+        // decoded formula. (A looser signature also caught rock models, smoke and meteors that compute other things.)
+        static readonly Dictionary<string, string> Programs = new Dictionary<string, string>
+        {
+            ["a0b7812329521b250fbc27d99fd842f8"] = "jewel", // effect/battle_ej/ej_transform_start/ej_transform01_c03_crystal02 core*
+            ["02e4abb1ab6e6ca4ac2ec0d2c2355293"] = "sheen", // its surface* children
+        };
+
         static string Program(string fp)
         {
             if (fp == null) return null;
-            int pows = System.Text.RegularExpressions.Regex.Matches(fp, @"POW\.F32").Count;
-            if (fp.Contains("buf5[272]") && fp.Contains("buf6[1472]") && pows >= 2) return "jewel";
-            if (fp.Contains("buf5[256]") && pows >= 1 && fp.Contains("buf10[48]")) return "sheen";
-            return null;
+            var lines = new List<string>();
+            foreach (var raw in fp.Split('\n'))
+            {
+                string l = raw.Trim();
+                if (l.Length == 0 || l.StartsWith("#") || l.StartsWith("OPTION") || l.StartsWith("CBUFFER") || l.StartsWith("ATTRIB") || l.StartsWith("TEMP")
+                    || l.StartsWith("LONG") || l.StartsWith("SHORT") || l.StartsWith("OUTPUT") || l.StartsWith("!!")) continue;
+                if (l.StartsWith("REP.S")) break;
+                var parts = new List<string> { l.Split(' ')[0] };
+                foreach (System.Text.RegularExpressions.Match m in System.Text.RegularExpressions.Regex.Matches(l, @"buf\d+\[\d+\]")) parts.Add(m.Value);
+                foreach (System.Text.RegularExpressions.Match m in System.Text.RegularExpressions.Regex.Matches(l, @"\{[^}]*\}")) parts.Add(m.Value);
+                lines.Add(parts[0] + " " + string.Join(" ", parts.Skip(1))); // "OP " when nothing follows, as hashed
+            }
+            using var md5 = System.Security.Cryptography.MD5.Create();
+            string hash = BitConverter.ToString(md5.ComputeHash(System.Text.Encoding.UTF8.GetBytes(string.Join("\n", lines)))).Replace("-", "").ToLowerInvariant();
+            return Programs.TryGetValue(hash, out var name) ? name : null;
         }
 
         static bool Possible(TimelineGroup group)

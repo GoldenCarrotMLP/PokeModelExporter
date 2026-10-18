@@ -416,6 +416,42 @@ switch (rest[0])
         break;
     }
 
+    case "programs": // programs <list file of .ptcl archive paths> --out <dir>: SV-custom emitters' fragment programs grouped by text
+    {
+        int o = rest.IndexOf("--out");
+        string outDir = Path.GetFullPath(rest[o + 1]);
+        Directory.CreateDirectory(outDir);
+        var groups = new Dictionary<string, (string sample, List<string> users)>();
+        foreach (var path in File.ReadLines(rest[1]))
+        {
+            var data = archive.Read(path.Trim());
+            if (data == null) continue;
+            VfxbFile file;
+            try { file = VfxbFile.Read(data); } catch { continue; }
+            void Walk(IEnumerable<VfxbEmitter> list)
+            {
+                foreach (var e in list)
+                {
+                    if (e.CustomShaderIndex == 1 && file.FragmentProgram(e.ShaderIndex) is string fp)
+                    {
+                        string key = Convert.ToHexString(System.Security.Cryptography.MD5.HashData(System.Text.Encoding.ASCII.GetBytes(fp)))[..10];
+                        if (!groups.TryGetValue(key, out var g)) groups[key] = g = (fp, new List<string>());
+                        g.users.Add(Path.GetFileNameWithoutExtension(path) + "/" + e.Name);
+                    }
+                    Walk(e.Children);
+                }
+            }
+            foreach (var set in file.Sets) Walk(set.Emitters);
+        }
+        foreach (var kv in groups)
+        {
+            File.WriteAllText(Path.Combine(outDir, kv.Key + ".txt"), kv.Value.sample);
+            File.WriteAllLines(Path.Combine(outDir, kv.Key + ".users"), kv.Value.users);
+        }
+        Console.WriteLine($"{groups.Count} distinct SV-custom fragment programs, {groups.Values.Sum(g => g.users.Count)} emitters -> {outDir}");
+        break;
+    }
+
     case "skeletons": // skeletons: every catalog model's segment-scale-compensate flags (trskl bones[].inherit_position)
     {
         var catalog = new SvCatalog(archive.Read(SvCatalog.Path));
