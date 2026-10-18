@@ -70,6 +70,15 @@ if (rest[0] == "audio") // audio <bank> <EVENT_NAME>... --out <dir> [--switch IN
     return 0;
 }
 
+if (rest[0] == "sesd") // sesd <GARC a/0/8/8> <index>: an Ultra Sun/Moon battle sequence's commands with typed arguments
+{
+    var garc = PokeModelExporter.Ctr.Garc.Read(rest[1]);
+    var seq = PokeModelExporter.Ctr.Sesd.Read(PokeModelExporter.Ctr.Garc.File0(garc, int.Parse(rest[2])));
+    Console.WriteLine($"version {seq.Version}, {seq.Length} frames, {seq.Records.Count} commands");
+    foreach (var r in seq.Records) Console.WriteLine(r);
+    return 0;
+}
+
 if (rest[0] == "ctrmotion") // ctrmotion <GARC file> <index> [--out <file.json>]: an Ultra Sun/Moon (3DS) GF motion pack as JSON
 {
     var garc = PokeModelExporter.Ctr.Garc.Read(rest[1]);
@@ -94,12 +103,8 @@ if (rest[0] == "ctrmodel") // ctrmodel <GARC file> <index> --out <file.glb>: an 
     if (!PokeModelExporter.Ctr.GfModelPack.IsPack(data)) { Console.Error.WriteLine("not a GF model pack"); return 1; }
     var pack = PokeModelExporter.Ctr.GfModelPack.Read(data);
     int o = rest.IndexOf("--out");
-    var textures = new Dictionary<string, byte[]>();
     foreach (var t in pack.Textures)
-    {
         Console.WriteLine($"texture {t.Name} {t.Width}x{t.Height} {PokeModelExporter.Ctr.PicaTexture.Name(t.Format)} mips {t.Mips}{(t.Rgba == null ? " (not decoded)" : "")}");
-        if (t.Rgba != null) textures[t.Name] = Png.Encode(t.Rgba, t.Width, t.Height);
-    }
     foreach (var m in pack.Models)
     {
         Console.WriteLine($"model {m.Name}: {m.Bones.Count} bones, {m.Materials.Count} materials, {m.Meshes.Count} meshes");
@@ -110,15 +115,25 @@ if (rest[0] == "ctrmodel") // ctrmodel <GARC file> <index> --out <file.glb>: an 
         foreach (var mm in md.Materials) { var so = mm.ShaderOptions; Console.WriteLine("  " + mm.Name + ": tev " + so.GetValueOrDefault("pica.tev") + " | buffer " + so.GetValueOrDefault("pica.tevBuffer") + " | colorOp " + so["pica.colorOp"] + " blend " + so["pica.blend"] + " alpha " + so["pica.alphaTest"] + " depth " + so["pica.depth"] + " cull " + so["pica.cull"] + " const0 " + mm.Colors["Constant0"]); }
         foreach (var w in warnings) Console.WriteLine("  warning: " + w);
         foreach (var mesh in md.Meshes) Console.WriteLine($"  mesh {mesh.Name}: {mesh.Positions.Length} vertices, {mesh.SubMeshes.Sum(s => s.Indices.Length) / 3} triangles, uv sets {mesh.TexCoords.Count}{(mesh.Colors != null ? ", colours" : "")}");
-        if (o >= 0)
+        if (rest.Contains("--bones"))
         {
-            string file = pack.Models.Count == 1 ? rest[o + 1] : Path.ChangeExtension(rest[o + 1], null) + "_" + m.Name + ".glb";
-            File.WriteAllBytes(file, GlbWriter.Write(md, textures, mat =>
+            foreach (var b in m.Bones) Console.WriteLine($"  bone {b.Name} <- {b.Parent} flags {b.Flags} s {b.Scale} r {b.Rotation} t {b.Translation}");
+            foreach (var gm in m.Meshes) Console.WriteLine($"  gfmesh {gm.Name}: bones/vertex {gm.BoneIndicesPerVertex}, box {gm.BoxMin} .. {gm.BoxMax}, sub-mesh bones " + string.Join(" | ", gm.SubMeshes.Select(s => string.Join(",", s.BoneIndices))));
+            foreach (var mesh in md.Meshes)
             {
-                var map = MaterialMapping.Default(mat);
-                map.Unlit = true; map.DoubleSided = true; // effect stages: unlit; blending comes later from the render state
-                return map;
-            }));
+                var min = new System.Numerics.Vector3(float.MaxValue); var max = new System.Numerics.Vector3(float.MinValue);
+                foreach (var v in mesh.Positions) { min = System.Numerics.Vector3.Min(min, v); max = System.Numerics.Vector3.Max(max, v); }
+                Console.WriteLine($"  positions {mesh.Name}: {min} .. {max}, joints used " + string.Join(",", mesh.Joints.Where((j, i) => mesh.Weights[i] > 0).Distinct()));
+            }
+        }
+    }
+    if (o >= 0)
+    {
+        var glbs = PokeModelExporter.Ctr.CtrGlb.FromPack(pack);
+        foreach (var (name, glb) in glbs)
+        {
+            string file = glbs.Count == 1 ? rest[o + 1] : Path.ChangeExtension(rest[o + 1], null) + "_" + name + ".glb";
+            File.WriteAllBytes(file, glb);
             Console.WriteLine("  -> " + file);
         }
     }

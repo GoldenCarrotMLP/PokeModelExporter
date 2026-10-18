@@ -50,6 +50,69 @@ namespace PokeModelExporter.Ctr
         }
     }
 
+    // A GARC read entry by entry from disk (a/0/8/7 is 179 MB): the tables at open, each file when asked. Thread-safe.
+    public sealed class GarcFile : IDisposable
+    {
+        readonly FileStream _file;
+        readonly long _data;
+        readonly List<(int Start, int End)[]> _entries = new List<(int, int)[]>();
+
+        public int Count => _entries.Count;
+
+        public GarcFile(string path)
+        {
+            _file = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read);
+            var head = new byte[0x1C];
+            ReadAt(0, head);
+            if (head[0] != 'C' || head[1] != 'R' || head[2] != 'A' || head[3] != 'G') throw new InvalidDataException("not a GARC");
+            int headerSize = BitConverter.ToInt32(head, 4);
+            _data = BitConverter.ToUInt32(head, 0x10);
+            var b = new byte[_data];
+            ReadAt(0, b);
+            int p = headerSize;
+            if (b[p] != 'O' || b[p + 1] != 'T' || b[p + 2] != 'A' || b[p + 3] != 'F') throw new InvalidDataException("GARC: no FATO");
+            int fatoSize = BitConverter.ToInt32(b, p + 4), count = BitConverter.ToUInt16(b, p + 8);
+            var offsets = new int[count];
+            for (int i = 0; i < count; i++) offsets[i] = BitConverter.ToInt32(b, p + 12 + 4 * i);
+            p += fatoSize;
+            if (b[p] != 'B' || b[p + 1] != 'T' || b[p + 2] != 'A' || b[p + 3] != 'F') throw new InvalidDataException("GARC: no FATB");
+            foreach (int o in offsets)
+            {
+                int q = p + 12 + o;
+                uint bits = BitConverter.ToUInt32(b, q); q += 4;
+                var subs = new List<(int, int)>();
+                for (int k = 0; k < 32; k++)
+                {
+                    if ((bits & (1u << k)) == 0) continue;
+                    subs.Add((BitConverter.ToInt32(b, q), BitConverter.ToInt32(b, q + 4))); q += 12;
+                }
+                _entries.Add(subs.ToArray());
+            }
+        }
+
+        // Sub-file `sub` of entry i, decompressed when it is LZ11; null when there is none.
+        public byte[] Read(int i, int sub = 0)
+        {
+            if (i < 0 || i >= _entries.Count || sub >= _entries[i].Length) return null;
+            var (start, end) = _entries[i][sub];
+            var d = new byte[end - start];
+            ReadAt(_data + start, d);
+            return Lz11.Maybe(d);
+        }
+
+        void ReadAt(long at, byte[] into)
+        {
+            lock (_file)
+            {
+                _file.Position = at;
+                int n = 0;
+                while (n < into.Length) { int r = _file.Read(into, n, into.Length - n); if (r <= 0) throw new EndOfStreamException(); n += r; }
+            }
+        }
+
+        public void Dispose() => _file.Dispose();
+    }
+
     public static class Lz11
     {
         // Decompresses when the data looks like LZ11 (0x11 + a size that fits); otherwise returns it as is.
