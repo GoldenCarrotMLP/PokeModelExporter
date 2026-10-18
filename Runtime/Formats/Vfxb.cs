@@ -361,6 +361,8 @@ namespace PokeModelExporter.Formats
 
         // Render state
         public bool BlendEnabled, DepthTest, DepthWrite, AlphaTest;
+        public int ParticleDataOffset; // byte offset of ParticleData (infinite life, billboard, rotation, offset types...)
+        public int FluctuationOffset; // byte offset of the 12 bytes of fluctuation flags in the record
         public int AlphaThresholdOffset; // byte offset of AlphaThreshold in the emitter record
         public int StaticTailOffset; public float[] StaticTail; // EmitterStatic's soft/fresnel/near/far, decal, alpha threshold... block
         public byte BlendType, DisplaySide, AlphaFunc;
@@ -496,6 +498,7 @@ namespace PokeModelExporter.Formats
             e.AlphaThreshold = r.F32(); r.Skip(4);
 
             // ParticleData
+            e.ParticleDataOffset = r.Pos - start;
             e.InfiniteLife = r.U8() != 0; r.U8(); e.BillboardType = r.U8(); e.RotationType = r.U8(); e.OffsetType = r.U8();
             r.Skip(11);
             e.Life = r.I32(); e.LifeRandom = r.I32(); e.MomentumRandom = r.F32(); r.Skip(4);
@@ -530,7 +533,7 @@ namespace PokeModelExporter.Formats
             // Scale
             e.ParticleScale = r.Floats(3); e.ParticleScaleRandom = r.Floats(3); r.Skip(4 + 8);
 
-            r.Skip(12); // fluctuation flags
+            e.FluctuationOffset = r.Pos - start; r.Skip(12); // fluctuation flags
 
             for (int i = 0; i < 3; i++)
             {

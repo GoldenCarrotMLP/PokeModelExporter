@@ -81,7 +81,11 @@ namespace PokeModelExporter.Formats
                 return _r;
             }
 
-            void Emit(string s) { _b.Append(' ', 4 * _indent).Append(s).Append('\n'); }
+            // One instruction = one line: { its lanes computed; then stored } (keeps the files a fraction of the size).
+            bool _line;
+            void Emit(string s) { if (_line) _b.Append(' ').Append(s); else _b.Append(' ', 4 * _indent).Append(s).Append('\n'); }
+            void Open() { _b.Append(' ', 4 * _indent).Append('{'); _line = true; }
+            void Close() { _b.Append(" }\n"); _line = false; }
 
             static readonly Regex CondRe = new Regex(@"^\(?(EQ|NE|LT|GT|LE|GE|TR|FL)(\d)?(?:\.([xyzw]{1,4}))?\)?$");
 
@@ -205,8 +209,7 @@ namespace PokeModelExporter.Formats
             // Every written lane computed first (a source may be the destination), then stored.
             void Write(Dst dst, string[] lanes, char type, bool sat, bool setCc)
             {
-                Emit("{");
-                _indent++;
+                Open();
                 string vt = type == 'f' ? "float" : type == 'i' ? "int" : "uint";
                 for (int i = 0; i < 4; i++)
                 {
@@ -223,8 +226,7 @@ namespace PokeModelExporter.Formats
                     if (setCc) store += $" cc.{c} = (float)v{c};";
                     Emit(dst.Cond != null ? $"if {Test(dst.Cond, i)} {{ {store} }}" : store);
                 }
-                _indent--;
-                Emit("}");
+                Close();
             }
 
             string Dot(Src[] s, int n)
@@ -270,8 +272,7 @@ namespace PokeModelExporter.Formats
                     lanes[i] = $"SvLdc(_SvB{buf}, {idx}{off + 4 * i})";
                 }
                 // bits as stored: the type only matters to how later instructions read them
-                Emit("{");
-                _indent++;
+                Open();
                 for (int i = 0; i < 4; i++) if (lanes[i] != null) Emit($"uint v{"xyzw"[i]} = asuint({lanes[i]});");
                 for (int i = 0; i < 4; i++)
                     if (lanes[i] != null)
@@ -280,8 +281,7 @@ namespace PokeModelExporter.Formats
                         string store = $"{dst.Name}.{c} = v{c};";
                         Emit(dst.Cond != null ? $"if {Test(dst.Cond, i)} {{ {store} }}" : store);
                     }
-                _indent--;
-                Emit("}");
+                Close();
             }
 
             void Need(int buf, int bytes)
@@ -308,8 +308,7 @@ namespace PokeModelExporter.Formats
                     case "LOD": sample = $"SvLod{slot}(float2({F(0)}, {F(1)}))"; break;
                     default: sample = $"SvFetch{slot}(int3({S(coord, 0, 'i')}, {S(coord, 1, 'i')}, {S(coord, 2, 'i')}))"; break; // TXF
                 }
-                Emit("{");
-                _indent++;
+                Open();
                 Emit($"float4 s = {sample};");
                 for (int i = 0; i < 4; i++)
                 {
@@ -319,8 +318,7 @@ namespace PokeModelExporter.Formats
                     if (setCc) store += $" cc.{c} = s.{c};";
                     Emit(dst.Cond != null ? $"if {Test(dst.Cond, i)} {{ {store} }}" : store);
                 }
-                _indent--;
-                Emit("}");
+                Close();
             }
 
             sealed class Dst { public string Name, Mask, Cond; }
