@@ -762,6 +762,21 @@ switch (rest[0])
         var teraTimeline = "demo/ej/ej_transform01/ej_transform01.trtml";
         bool wantTera = only.Count == 0 || only.Contains(Tera);
         if (wantTera) byMove[Tera] = new List<string> { teraTimeline };
+        // Mega Evolution (Docs/mega-research.md), as -3002 (mega.json), from Legends Z-A (--game <legends-za>): the Pokemon's
+        // part of the cinematic (ik_demo/ee/m_shinka_poke) and every species' own (m_shinka_pm<dex>[x|y|z]), sharing one
+        // scene file (m_shinka_cmn). The trainer's parts (m_shinka_pc, m_shinka_tr*) wait for trainer models. Only this from
+        // Z-A: textures.json / primitives.json are merged into the existing ones.
+        const int Mega = -3002;
+        bool za = SvCatalog.Open(archive.Read)?.Game == "legends-za";
+        byte[] megaScene = null;
+        if (za)
+        {
+            byMove.Clear();
+            megaScene = archive.Read("world/ik_obj_template/effect/demo/em/m_shinka_cmn_/m_shinka_cmn_0.trsot");
+            byMove[Mega] = File.ReadLines(rest[h + 1]).Select(l => l.Substring(l.IndexOf(' ') + 1))
+                .Where(p => System.Text.RegularExpressions.Regex.IsMatch(p, @"^ik_demo/ee/m_shinka_(poke|pm[0-9a-z_]+)/m_shinka_[a-z0-9_]+\.trtml$")).ToList();
+            Console.WriteLine($"Mega Evolution: {byMove[Mega].Count} timelines");
+        }
         long total = 0;
         int files = 0, emitters = 0;
         var watch = System.Diagnostics.Stopwatch.StartNew();
@@ -781,6 +796,7 @@ switch (rest[0])
                 else if (stem.EndsWith("_0", StringComparison.Ordinal)) scenes[stem.Substring(0, stem.Length - 2)] = data;
             }
             if (timelines.Count == 0 && kv.Key > -2000) continue;
+            if (kv.Key == Mega && megaScene != null) foreach (var stem in timelines.Keys) scenes[stem] = megaScene;
             // Later hits of multi-hit moves (ew0024_2: Double Kick's second kick) have no scene objects of their own:
             // they play the first hit's objects (73 timelines). _1.trsot files repeat the _0 ones.
             if (scenes.Count > 0)
@@ -801,13 +817,13 @@ switch (rest[0])
                     if (archive.Read($"demo/ej/ej_transform01/ej_transform01_cam_c{c:D3}.trcma") is byte[] cma)
                         cameras[$"ej_transform01_cam_c{c:D3}"] = TrinityAnimationReader.ReadCamera(cma);
             }
-            string folder = kv.Key == Tera ? "demo/ej/ej_transform01" : kv.Key <= -2000 ? $"effect/battle_etb/etb{-2000 - kv.Key:D3}"
+            string folder = kv.Key == Mega ? "ik_demo/ee/m_shinka" : kv.Key == Tera ? "demo/ej/ej_transform01" : kv.Key <= -2000 ? $"effect/battle_etb/etb{-2000 - kv.Key:D3}"
                 : kv.Key <= -1000 ? $"effect/battle_ee/ee{-1000 - kv.Key:D3}" : kv.Key < 0 ? $"effect/battle_es/es{-kv.Key:D3}" : null;
             string json = SvMoveFx.Export(kv.Key, timelines, scenes, archive.Read, out int count,
                 (path, name, cx, cy) => { if (!textureSources.ContainsKey(name)) textureSources[name] = (path, cx, cy); },
                 (path, name, prim) => { if (!primitiveShapes.ContainsKey(name)) { var shape = FxPrimitiveShape.Analyze(prim); shape.Source = path; primitiveShapes[name] = shape; } },
                 folder, extraScenes, cameras);
-            string file = Path.Combine(outDir, kv.Key == Tera ? "tera.json" : kv.Key <= -2000 ? $"etb{-2000 - kv.Key:D3}.json"
+            string file = Path.Combine(outDir, kv.Key == Mega ? "mega.json" : kv.Key == Tera ? "tera.json" : kv.Key <= -2000 ? $"etb{-2000 - kv.Key:D3}.json"
                 : kv.Key <= -1000 ? $"ee{-1000 - kv.Key:D3}.json" : kv.Key < 0 ? $"es{-kv.Key:D3}.json" : $"{kv.Key:D4}.json");
             File.WriteAllText(file, json);
             total += json.Length; files++; emitters += count;
@@ -819,7 +835,7 @@ switch (rest[0])
         pw.BeginObject();
         foreach (var kv in primitiveShapes) { pw.Name(kv.Key); kv.Value.Write(pw); }
         pw.EndObject();
-        File.WriteAllText(Path.Combine(outDir, "primitives.json"), pw.ToString());
+        File.WriteAllText(Path.Combine(outDir, "primitives.json"), za ? MergeJson(Path.Combine(outDir, "primitives.json"), pw.ToString()) : pw.ToString());
         Console.WriteLine($"{primitiveShapes.Count} primitive shapes ({primitiveShapes.Count(p => p.Value.Kind == "revolution")} round) -> primitives.json");
 
         // Texture shapes (textures.json): analysed from the first particle file that has each texture.
@@ -850,7 +866,7 @@ switch (rest[0])
             catch (Exception e) { Console.WriteLine($"{t.Key}: {e.Message}"); }
         }
         tw.EndObject();
-        File.WriteAllText(Path.Combine(outDir, "textures.json"), tw.ToString());
+        File.WriteAllText(Path.Combine(outDir, "textures.json"), za ? MergeJson(Path.Combine(outDir, "textures.json"), tw.ToString()) : tw.ToString());
         Console.WriteLine($"{analysed}/{textureSources.Count} texture shapes -> textures.json ({watch.ElapsedMilliseconds} ms)");
         break;
     }
@@ -1005,6 +1021,18 @@ static System.Numerics.Vector3 QuatToEuler(System.Numerics.Quaternion q)
     double sinz = 2 * (q.W * q.Z + q.X * q.Y), cosz = 1 - 2 * (q.Y * q.Y + q.Z * q.Z);
     const double d = 180 / Math.PI;
     return new System.Numerics.Vector3((float)(Math.Atan2(sinx, cosx) * d), (float)(Math.Asin(siny) * d), (float)(Math.Atan2(sinz, cosz) * d));
+}
+
+// An existing JSON object file with the entries of another added (existing names kept): Legends Z-A's effects join
+// Scarlet/Violet's textures.json / primitives.json instead of replacing them.
+static string MergeJson(string existingFile, string added)
+{
+    if (!File.Exists(existingFile)) return added;
+    var into = System.Text.Json.Nodes.JsonNode.Parse(File.ReadAllText(existingFile)).AsObject();
+    var more = System.Text.Json.Nodes.JsonNode.Parse(added).AsObject();
+    foreach (var kv in more.ToList())
+        if (!into.ContainsKey(kv.Key)) { more.Remove(kv.Key); into[kv.Key] = kv.Value; }
+    return into.ToJsonString();
 }
 
 static ModelData LoadModel(TrinityArchive archive, List<string> rest) => LoadModelFrom(archive, rest, out _);

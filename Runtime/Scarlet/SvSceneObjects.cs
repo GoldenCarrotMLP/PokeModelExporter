@@ -29,7 +29,8 @@ namespace PokeModelExporter.Scarlet
                 for (int i = 0; i < children.Length; i++)
                 {
                     var child = children.Table(i);
-                    if (child.String(0) != "trinity_ParticleComponent") continue;
+                    // Scarlet/Violet's particle component; Legends Z-A calls it ManagedParticle (same payload: the .ptcl path first).
+                    if (child.String(0) != "trinity_ParticleComponent" && child.String(0) != "ManagedParticle") continue;
                     var component = Payload(child);
                     string path = component.IsNull ? null : component.String(0);
                     if (name == null || path == null) continue;

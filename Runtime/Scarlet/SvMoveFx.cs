@@ -33,7 +33,43 @@ namespace PokeModelExporter.Scarlet
             ["PokeAnimeState"] = new[] { "Poke1Ground", "Poke2Ground" },
             ["PokeRare"] = new[] { "Poke1NoRare" },
             ["PlayerRide"] = new[] { "NoRide" }, // the Terastal cinematic: the trainer on foot (not riding Koraidon / Miraidon)
+            // Legends Z-A's Mega Evolution cinematic: the player's own trainer, a Pokemon of normal size (not an alpha).
+            ["PlayerType"] = new[] { "Tr1Player" },
+            ["PokeType"] = new[] { "AtkNormal", "DefNormal" },
         };
+
+        // Legends Z-A names some commands differently from Scarlet/Violet (gfa/ camera commands, no Title/ prefix on blend
+        // colours, post effects and fades, fade colours 0..1): rewritten to the names and units the engine reads.
+        // AttachObj (an object the timeline pins to the attacker's origin) frames the attacker.
+        public static void ToSvNames(TimelineCommand c)
+        {
+            string t = c.Type;
+            if (t == "gfa/CompositionCamera/CompositionCamera")
+            {
+                // Z-A frames on a -1..1 screen (0 = centre: its sub-target limits run -1..1), Scarlet/Violet on 0..1.
+                c.Type = "Title/Battle/CompositionCamera";
+                foreach (var axis in new[] { "RatioX", "RatioY" })
+                    if (c.Parameters.TryGetValue(axis, out var r) && r is float f) c.Parameters[axis] = (f + 1) / 2;
+            }
+            else if (t == "gfa/CompositionCamera/CompositionCameraTargetReset") c.Type = "Title/Battle/ResetBattleCamera";
+            else if (t == "gfa/AdjustScale/AdjustScaleTarget") c.Type = "Title/Battle/AdjustScaleTarget";
+            else if (t == "gfa/FieldCamera/CameraShake")
+            {
+                // Pattern 1 is a faint rumble (amplitude 0.005), 4 a jolt (amplitude 1): mapped onto SV's ShakeValue range.
+                c.Type = "Title/Battle/CameraShake";
+                float amp = c.Parameters.TryGetValue("ValueAmplitude", out var a) && a is float f ? f : 0;
+                int pattern = c.Parameters.TryGetValue("ShakePattern", out var sp) && sp is int i ? i : 1;
+                c.Parameters["ShakeValue"] = pattern == 1 ? amp * 4 : amp * 0.06f;
+            }
+            else if (t.StartsWith("BlendColor/", StringComparison.Ordinal) || t.StartsWith("PostEffect/", StringComparison.Ordinal)) c.Type = "Title/" + t;
+            else if (t.StartsWith("Fade/", StringComparison.Ordinal))
+            {
+                c.Type = "Title/" + t;
+                if (c.Parameters.TryGetValue("FadeColor", out var col) && col is Vector3 v) c.Parameters["FadeColor"] = v * 255;
+                if (c.Parameters.TryGetValue("Alpha", out var al) && al is float af) c.Parameters["Alpha"] = af * 255;
+            }
+            if (c.Parameters.TryGetValue("Target", out var target) && target as string == "AttachObj") c.Parameters["Target"] = "ATK";
+        }
 
         // Checked by the engine per use.
         // TargetPosition: which way the camera sees a Pokemon (AttackerBack = the user from behind, i.e. on the player's
@@ -104,6 +140,7 @@ namespace PokeModelExporter.Scarlet
                 foreach (var group in timeline.Groups)
                 {
                     if (!Possible(group)) continue;
+                    foreach (var c in group.Tracks.SelectMany(t => t.Commands)) ToSvNames(c);
                     var commands = group.Tracks.SelectMany(t => t.Commands).Where(c => Keep(c.Type)).OrderBy(c => c.Start).ToList();
                     if (commands.Count == 0) continue;
                     w.BeginObject().Name("name").Value(group.Object);
