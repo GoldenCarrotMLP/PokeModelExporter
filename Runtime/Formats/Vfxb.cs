@@ -13,6 +13,14 @@ namespace PokeModelExporter.Formats
     //   ESTA -> ESET (name at binary+0x10) -> EMTR (EmitterData at binary; children = child emitters;
     //   attributes = "EA**" emitter animations and others) ; GRTF (textures: GTNT id -> name, then BNTX) ;
     //   PRMA / G3PR (primitive meshes) ; GRSN / GRSC (Switch shaders, unused).
+    // What a shader variation's stages bind where (VfxbFile.Reflection), per kind: 0 inputs, 1 outputs, 2 samplers,
+    // 3 uniform blocks, 4 storage buffers; each a list of (name, slot).
+    public sealed class VfxbShaderReflection
+    {
+        public List<(string name, int slot)>[] Vertex = NewKinds(), Fragment = NewKinds();
+        static List<(string, int)>[] NewKinds() => new[] { new List<(string, int)>(), new List<(string, int)>(), new List<(string, int)>(), new List<(string, int)>(), new List<(string, int)>() };
+    }
+
     public sealed class VfxbFile
     {
         public int Version;
@@ -21,19 +29,42 @@ namespace PokeModelExporter.Formats
         public ArraySegment<byte> Bntx; // the textures, a whole BNTX file (empty when there are none)
         public Dictionary<ulong, BfresPrimitives.Primitive> Primitives = new Dictionary<ulong, BfresPrimitives.Primitive>();
         byte[] _data;
-        Dictionary<int, string> _fragmentPrograms;
+        Dictionary<int, string> _fragmentPrograms, _vertexPrograms;
+        Dictionary<int, VfxbShaderReflection> _reflections;
 
         // A shader variation's compiled fragment program as NV assembly text (GRSN = BNSH: variation i -> program
         // (+0x10) -> fragment code record (program slot 5) -> info (+0x8) -> text at info + 0x878), null when absent.
         // The programs are the ground truth for what an emitter's shader does (Research/shaders.py reads the same).
         public string FragmentProgram(int variation)
         {
-            if (_fragmentPrograms == null)
-            {
-                _fragmentPrograms = new Dictionary<int, string>();
-                try { ReadPrograms(); } catch (Exception) { } // a file without (readable) shaders: no programs
-            }
+            Programs();
             return _fragmentPrograms.TryGetValue(variation, out var text) ? text : null;
+        }
+
+        // The same variation's vertex program (slot 1: the particle's position, colours, UVs... computed on the GPU), which
+        // says what each of the fragment program's inputs (attrib n, packed per variation) holds.
+        public string VertexProgram(int variation)
+        {
+            Programs();
+            return _vertexPrograms.TryGetValue(variation, out var text) ? text : null;
+        }
+
+        // A shader variation's reflection: per stage, the names of its vertex inputs, outputs, samplers (textures) and
+        // uniform blocks with the slot each is bound to (vertex.attrib[slot], program.buffer[slot]; a sampler's bindless
+        // handle sits at its uniform block 14 offset 8 x slot). Null when absent.
+        public VfxbShaderReflection Reflection(int variation)
+        {
+            Programs();
+            return _reflections.TryGetValue(variation, out var r) ? r : null;
+        }
+
+        void Programs()
+        {
+            if (_fragmentPrograms != null) return;
+            _fragmentPrograms = new Dictionary<int, string>();
+            _vertexPrograms = new Dictionary<int, string>();
+            _reflections = new Dictionary<int, VfxbShaderReflection>();
+            try { ReadPrograms(); } catch (Exception) { } // a file without (readable) shaders: no programs
         }
 
         void ReadPrograms()
@@ -50,14 +81,60 @@ namespace PokeModelExporter.Formats
             for (int v = 0; v < count; v++)
             {
                 long program = BitConverter.ToInt64(d, (int)(k + array + 0x40 * v + 0x10));
-                long code = BitConverter.ToInt64(d, (int)(k + program + 8 * 5));
-                if (code == 0) continue;
-                long info = BitConverter.ToInt64(d, (int)(k + code + 8));
-                int text = (int)(k + info + 0x878);
-                if (text + 4 > d.Length || Encoding.ASCII.GetString(d, text, 4) != "!!NV") continue;
-                int end = Array.IndexOf(d, (byte)0, text);
-                _fragmentPrograms[v] = Encoding.ASCII.GetString(d, text, (end < 0 ? d.Length : end) - text);
+                foreach (var (slot, into) in new[] { (5, _fragmentPrograms), (1, _vertexPrograms) })
+                {
+                    long code = BitConverter.ToInt64(d, (int)(k + program + 8 * slot));
+                    if (code == 0) continue;
+                    long info = BitConverter.ToInt64(d, (int)(k + code + 8));
+                    int text = (int)(k + info + 0x878);
+                    if (text + 4 > d.Length || Encoding.ASCII.GetString(d, text, 4) != "!!NV") continue;
+                    int end = Array.IndexOf(d, (byte)0, text);
+                    into[v] = Encoding.ASCII.GetString(d, text, (end < 0 ? d.Length : end) - text);
+                }
+                // program +0x78 -> reflection: stage data pointers (vertex, hull, domain, geometry, pixel, compute); each
+                // stage: dictionaries (inputs, outputs, samplers, constant buffers, storage buffers), then the start of
+                // each kind's run in one slot array (outputs, samplers, constant buffers, storage buffers) and that array.
+                long reflection = BitConverter.ToInt64(d, (int)(k + program + 0x78));
+                if (reflection != 0)
+                {
+                    var r = new VfxbShaderReflection();
+                    foreach (var (stage, into) in new[] { (0, r.Vertex), (4, r.Fragment) })
+                    {
+                        long sd = BitConverter.ToInt64(d, (int)(k + reflection + 8 * stage));
+                        if (sd == 0) continue;
+                        int at = (int)(k + sd);
+                        var dics = new long[5];
+                        for (int i = 0; i < 5; i++) dics[i] = BitConverter.ToInt64(d, at + 8 * i);
+                        var starts = new int[5];
+                        for (int i = 1; i < 5; i++) starts[i] = BitConverter.ToInt32(d, at + 0x28 + 4 * (i - 1));
+                        long slots = BitConverter.ToInt64(d, at + 0x38);
+                        for (int i = 0; i < 5; i++)
+                        {
+                            if (dics[i] == 0) continue;
+                            var names = DicNames(d, k, dics[i]);
+                            for (int n = 0; n < names.Count; n++)
+                                into[i].Add((names[n], BitConverter.ToInt32(d, (int)(k + slots + 4 * (starts[i] + n)))));
+                        }
+                    }
+                    _reflections[v] = r;
+                }
             }
+        }
+
+        // A ResDic ("_DIC", count, then count + 1 entries of ref bit, left, right, name pointer; entry 0 is the root):
+        // its names in order. Names are length-prefixed (u16) strings.
+        static List<string> DicNames(byte[] d, int k, long dic)
+        {
+            int at = (int)(k + dic);
+            int count = BitConverter.ToInt32(d, at + 4);
+            var names = new List<string>();
+            for (int e = 1; e <= count; e++)
+            {
+                long ptr = BitConverter.ToInt64(d, at + 8 + 16 * e + 8);
+                int p = (int)(k + ptr);
+                names.Add(Encoding.ASCII.GetString(d, p + 2, BitConverter.ToUInt16(d, p)));
+            }
+            return names;
         }
 
         static int IndexOf(byte[] d, string magic, int from)
@@ -284,6 +361,8 @@ namespace PokeModelExporter.Formats
 
         // Render state
         public bool BlendEnabled, DepthTest, DepthWrite, AlphaTest;
+        public int AlphaThresholdOffset; // byte offset of AlphaThreshold in the emitter record
+        public int StaticTailOffset; public float[] StaticTail; // EmitterStatic's soft/fresnel/near/far, decal, alpha threshold... block
         public byte BlendType, DisplaySide, AlphaFunc;
         public float AlphaThreshold;
 
@@ -317,6 +396,7 @@ namespace PokeModelExporter.Formats
 
         public int ShaderIndex, ComputeShaderIndex, UserShaderIndex1, UserShaderIndex2, CustomShaderIndex;
         public byte ShaderRefType;
+        public byte[] Record; // the emitter record as stored (= its programs' static uniform block)
         public int ParsedSize, BinarySize; // bytes read vs. the section's binary size (equal when the layout is right)
 
         internal static VfxbEmitter Parse(byte[] d, int start)
@@ -364,7 +444,8 @@ namespace PokeModelExporter.Formats
             e.Alpha0Keys = r.Keys(e.NumAlpha0Keys);
             e.Color1Keys = r.Keys(e.NumColor1Keys);
             e.Alpha1Keys = r.Keys(e.NumAlpha1Keys);
-            r.Skip(4 * 8 + 4 * 2 + 4 * 2 + 4 * 4); // soft/fresnel/near/far, decal, alpha threshold, vel-to-scale, soft particle
+            e.StaticTailOffset = r.Pos - start;
+            e.StaticTail = r.Floats(16); // soft/fresnel/near/far (8), decal (2), alpha threshold (2), vel-to-scale, soft particle (4)
             e.ScaleKeys = r.Keys(e.NumScaleKeys);
             e.ParamKeys = r.Keys(Math.Max(1, e.NumParamKeys)); // parameter animation (custom shaders: e.g. distortion strength)
             e.RotateInit = r.Floats(3); r.Skip(4);
@@ -411,6 +492,7 @@ namespace PokeModelExporter.Formats
             // Render state
             e.BlendEnabled = r.U8() != 0; e.DepthTest = r.U8() != 0; r.U8(); e.DepthWrite = r.U8() != 0;
             e.AlphaTest = r.U8() != 0; e.AlphaFunc = r.U8(); e.BlendType = r.U8(); e.DisplaySide = r.U8();
+            e.AlphaThresholdOffset = r.Pos - start; // = its fragment programs' buf6 byte offset (buf6 is this record as stored)
             e.AlphaThreshold = r.F32(); r.Skip(4);
 
             // ParticleData
@@ -467,6 +549,10 @@ namespace PokeModelExporter.Formats
             }
             r.Skip(0x40);
             e.ParsedSize = r.Pos - start;
+            // The record as stored is the emitter's static uniform block (sysEmitterStaticUniformBlock, buffer 6 of its
+            // shader programs: byte offsets match, e.g. distortion at 256, colour keys at 960, the static tail at 1472).
+            e.Record = new byte[e.ParsedSize];
+            Array.Copy(d, start, e.Record, 0, e.ParsedSize);
             return e;
         }
 

@@ -416,6 +416,62 @@ switch (rest[0])
         break;
     }
 
+    case "translate": // translate <dir with NV program .txt files> [--out <dir>]: each to HLSL (NvToHlsl); counts what isn't supported
+    {
+        int o2 = rest.IndexOf("--out");
+        string outDir = o2 >= 0 ? Path.GetFullPath(rest[o2 + 1]) : null;
+        if (outDir != null) Directory.CreateDirectory(outDir);
+        var problems = new Dictionary<string, int>();
+        int ok = 0, total = 0;
+        foreach (var f in Directory.GetFiles(rest[1], "*.txt"))
+        {
+            total++;
+            try
+            {
+                var r = NvToHlsl.Translate(File.ReadAllText(f), "Sv_" + Path.GetFileNameWithoutExtension(f).Replace('.', '_'));
+                ok++;
+                if (outDir != null) File.WriteAllText(Path.Combine(outDir, Path.GetFileNameWithoutExtension(f) + ".hlsl"), r.Code);
+            }
+            catch (NotSupportedException e) { problems[e.Message] = problems.TryGetValue(e.Message, out int n) ? n + 1 : 1; }
+        }
+        Console.WriteLine($"{ok}/{total} translated");
+        foreach (var kv in problems.OrderByDescending(x => x.Value).Take(30)) Console.WriteLine($"  {kv.Value}  {kv.Key}");
+        break;
+    }
+
+    case "shaderabi": // shaderabi <list file of .ptcl archive paths>: which slot each named input / sampler / uniform block takes, over every SV-custom variation
+    {
+        var seen = new SortedDictionary<string, SortedDictionary<int, int>>();
+        string[] kinds = { "in", "out", "sampler", "block", "storage" };
+        foreach (var path in File.ReadLines(rest[1]))
+        {
+            var data = archive.Read(path.Trim());
+            if (data == null) continue;
+            VfxbFile file;
+            try { file = VfxbFile.Read(data); } catch { continue; }
+            var done = new HashSet<int>();
+            void Walk(IEnumerable<VfxbEmitter> list)
+            {
+                foreach (var e in list)
+                {
+                    if (e.CustomShaderIndex == 1 && done.Add(e.ShaderIndex) && file.Reflection(e.ShaderIndex) is VfxbShaderReflection r)
+                        foreach (var (stage, kindsOf) in new[] { ("vs", r.Vertex), ("fs", r.Fragment) })
+                            for (int i = 0; i < 5; i++)
+                                foreach (var (name, slot) in kindsOf[i])
+                                {
+                                    string key = $"{stage} {kinds[i]} {name}";
+                                    if (!seen.TryGetValue(key, out var slots)) seen[key] = slots = new SortedDictionary<int, int>();
+                                    slots[slot] = slots.TryGetValue(slot, out int n) ? n + 1 : 1;
+                                }
+                    Walk(e.Children);
+                }
+            }
+            foreach (var set in file.Sets) Walk(set.Emitters);
+        }
+        foreach (var kv in seen) Console.WriteLine($"{kv.Key}: " + string.Join(" ", kv.Value.Select(x => $"{x.Key}x{x.Value}")));
+        break;
+    }
+
     case "programs": // programs <list file of .ptcl archive paths> --out <dir>: SV-custom emitters' fragment programs grouped by text
     {
         int o = rest.IndexOf("--out");
@@ -437,6 +493,21 @@ switch (rest[0])
                         string key = Convert.ToHexString(System.Security.Cryptography.MD5.HashData(System.Text.Encoding.ASCII.GetBytes(fp)))[..10];
                         if (!groups.TryGetValue(key, out var g)) groups[key] = g = (fp, new List<string>());
                         g.users.Add(Path.GetFileNameWithoutExtension(path) + "/" + e.Name);
+                        // Each vertex program paired with it (they decide what its inputs hold), once per distinct text.
+                        if (file.VertexProgram(e.ShaderIndex) is string vp)
+                        {
+                            string vk = Convert.ToHexString(System.Security.Cryptography.MD5.HashData(System.Text.Encoding.ASCII.GetBytes(vp)))[..10];
+                            string vpath = Path.Combine(outDir, key + ".vp." + vk + ".txt");
+                            if (!File.Exists(vpath)) File.WriteAllText(vpath, vp);
+                            if (file.Reflection(e.ShaderIndex) is VfxbShaderReflection refl)
+                            {
+                                string[] kinds = { "in", "out", "sampler", "block", "storage" };
+                                var lines = new List<string>();
+                                foreach (var (stage, kindList) in new[] { ("vs", refl.Vertex), ("fs", refl.Fragment) })
+                                    for (int i = 0; i < 5; i++) foreach (var (n, slot) in kindList[i]) lines.Add($"{stage} {kinds[i]} {n} {slot}");
+                                File.WriteAllLines(Path.ChangeExtension(vpath, ".refl"), lines);
+                            }
+                        }
                     }
                     Walk(e.Children);
                 }
@@ -731,6 +802,9 @@ switch (rest[0])
     {
         int h = rest.IndexOf("--hashes"), o = rest.IndexOf("--out");
         string outDir = Path.GetFullPath(rest[o + 1]);
+        // --svshaders <dir>: also translate SV-custom emitters' compiled shaders into Unity shaders there (SvShaderGen).
+        int svs = rest.IndexOf("--svshaders");
+        if (svs >= 0) SvShaderGen.OutDir = Path.GetFullPath(rest[svs + 1]);
         Directory.CreateDirectory(outDir);
         var only = new HashSet<int>(rest.Skip(1).Where(a => int.TryParse(a, out _)).Select(int.Parse).Where(n => n > 0 && (h < 0 || n.ToString() != rest[h + 1])));
         var byMove = new SortedDictionary<int, List<string>>();
@@ -1085,7 +1159,7 @@ static void PrintEmitter(VfxbEmitter e, VfxbFile f, string indent)
     Console.WriteLine($"{indent}{e.Name}{(e.ParsedSize != e.BinarySize ? $"  !! parsed {e.ParsedSize} of {e.BinarySize} bytes" : "")}");
     Console.WriteLine($"{indent}  emit: {(e.OneTime ? "once" : "loop")} start {e.EmitStart} duration {e.EmitDuration} rate {e.Rate}±{e.RateRandom} interval {e.Interval}  life {e.Life}±{e.LifeRandom}{(e.InfiniteLife ? " infinite" : "")}  follow {e.FollowType}");
     Console.WriteLine($"{indent}  shape {e.VolumeType} radius {F(e.VolumeRadius)} sweep {e.SweepLongitude:0.##}  velocity all {e.AllDirection} dir {e.DirectionalScale}*{F(e.Direction)} diffusion {e.DiffusionAngle} random {e.VelocityRandom}  gravity {F(e.Gravity)} air {e.AirResistance}");
-    Console.WriteLine($"{indent}  draw: billboard {e.BillboardType} offset {e.OffsetType} blend {e.BlendType} combiner {e.ColorCombiner}/{e.AlphaCombiner} shader {e.ShaderType} soft {e.SoftParticle} flags {e.StaticFlags[0]:X8} inherit-flags path {e.InheritDrawPath} pre {e.PreDraw} a0f {e.InheritAlpha0EachFrame} a1f {e.InheritAlpha1EachFrame} own {e.EnableEmitterParticle} alphatest {e.AlphaTest} {e.AlphaFunc} {e.AlphaThreshold}  textures {string.Join(", ", tex)}{(e.PrimitiveId != ulong.MaxValue ? $"  primitive {e.PrimitiveId:X}" : "")}");
+    Console.WriteLine($"{indent}  draw: billboard {e.BillboardType} offset {e.OffsetType} blend {e.BlendType} combiner {e.ColorCombiner}/{e.AlphaCombiner} shader {e.ShaderType} soft {e.SoftParticle} flags {e.StaticFlags[0]:X8} inherit-flags path {e.InheritDrawPath} pre {e.PreDraw} a0f {e.InheritAlpha0EachFrame} a1f {e.InheritAlpha1EachFrame} own {e.EnableEmitterParticle} alphatest {e.AlphaTest} {e.AlphaFunc} {e.AlphaThreshold} @{e.AlphaThresholdOffset} tail@{e.StaticTailOffset} [{string.Join(" ", e.StaticTail.Select(x => x.ToString("0.###")))}]  textures {string.Join(", ", tex)}{(e.PrimitiveId != ulong.MaxValue ? $"  primitive {e.PrimitiveId:X}" : "")}");
     Console.WriteLine($"{indent}  scale {F(e.ParticleScale)}±{F(e.ParticleScaleRandom)} keys {K(e.ScaleKeys)}  rotate init {F(e.RotateInit)}±{F(e.RotateInitRandom)} add {F(e.RotateAdd)}±{F(e.RotateAddRandom)}");
     Console.WriteLine($"{indent}  color0 [{e.Color0Type}] {F(e.Color0)} keys {K(e.Color0Keys)}  alpha0 [{e.Alpha0Type}] {e.Alpha0} keys {K(e.Alpha0Keys)}");
     Console.WriteLine($"{indent}  color1 [{e.Color1Type}] {F(e.Color1)} keys {K(e.Color1Keys)}  alpha1 [{e.Alpha1Type}] {e.Alpha1}  emitter color {F(e.EmitterColor0)} scale {F(e.Scale)} translate {F(e.Translate)}");

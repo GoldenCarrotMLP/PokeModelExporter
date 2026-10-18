@@ -416,6 +416,19 @@ namespace PokeModelExporter.Scarlet
             // and "sheen" (light flowing over them: texture 1 x lerp(c1, c0, texture 0.r), UVs pushed by texture 2 and a
             // camera fresnel). P = CSDP bytes 48..60.
             if (e.CustomShaderIndex == 1 && Program(file.FragmentProgram(e.ShaderIndex)) is string program) w.Name("program").Value(program);
+            // The emitter's own compiled shader translated for Unity (SvShaderGen, only when asked for): the shader's key
+            // and the record its programs read as their static uniform block (base64).
+            if (e.CustomShaderIndex == 1 && SvShaderGen.For(file, e) is string svShader)
+            {
+                w.Name("svShader").Value(svShader).Name("svRecord").Value(SvShaderGen.Record(e));
+                // Its CSDP payload is the custom shader's reserved block (buffer 10: powers, edge colours... at 48 on).
+                if (e.AttributeData.TryGetValue("CSDP", out var block))
+                {
+                    var raw = new byte[block.Length * 4];
+                    Buffer.BlockCopy(block, 0, raw, 0, raw.Length);
+                    w.Name("svCustom").Value(Convert.ToBase64String(raw));
+                }
+            }
             // Stripes (emitter plugins EP02 "stripe", EP03 "super stripe"): each particle draws a ribbon through its last
             // `history` frames of positions instead of its own quad (String Shot's threads, trails behind projectiles).
             // EP02 = 4 enums, a float, then the history length; EP03 = 6 enums, then the history length.
