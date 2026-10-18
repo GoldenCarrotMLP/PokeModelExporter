@@ -165,6 +165,8 @@ namespace PokeModelExporter.Ctr
                 {
                     int num = _d[a + 5], period = BitConverter.ToInt16(_d, a + 8), used = BitConverter.ToInt16(_d, a + 10);
                     int rows = Math.Max(1, num / Math.Max(1, divisions));
+                    // the cell's height in UVs gives the rows when the count doesn't (smoke: 16 cells in 8 x 2, count 8)
+                    if (uvScale[1] > 0 && uvScale[1] < 1) rows = Math.Max(rows, (int)Math.Round(1 / uvScale[1]));
                     tj["divisions"] = new object[] { divisions, rows };
                     // the game's UV scale is the cell's size (1 / divisions); our shader cuts the cells itself
                     tj["uvScale"] = new object[] { Num((uvScale[0] == 0 ? 1 : uvScale[0]) * divisions), Num((uvScale[1] == 0 ? 1 : uvScale[1]) * rows) };
@@ -257,9 +259,8 @@ namespace PokeModelExporter.Ctr
             };
 
             // size: the base x (start, +startDiff by time2, held to time3, +endDiff by the end)
-            // the 3DS quad spans -1..1 (the size is a half width; the screen-filling mask behind the type's mark is 4 x 2.4,
-            // the screen's 5:3): our particles are as wide as their size
-            float[] baseSize = V(o + 0x4E4, 2, Cm * 2), s0 = V(o + 0x4EC, 2), sd1 = V(o + 0x4F4, 2), sd2 = V(o + 0x4FC, 2);
+            // the size is the quad's width (Breakneck Blitz's dash burst against the clip; twice that was 2-3x too big)
+            float[] baseSize = V(o + 0x4E4, 2, Cm), s0 = V(o + 0x4EC, 2), sd1 = V(o + 0x4F4, 2), sd2 = V(o + 0x4FC, 2);
             int st2 = I(o + 0x4D8), st3 = I(o + 0x4DC);
             j["size"] = Arr(new[] { baseSize[0], baseSize[1], baseSize[0] });
             j["sizeRandom"] = Arr(new[] { F(o + 0x4E0) * 100, F(o + 0x4E0) * 100, F(o + 0x4E0) * 100 });
@@ -282,6 +283,7 @@ namespace PokeModelExporter.Ctr
             float inertia = F(o + 0x534);
             j["spinResistance"] = Num(inertia > 0 ? (float)Math.Sqrt(inertia) : 1);
             if (regs != null) Classify(regs, j);
+            j["gammaSpace"] = true; // the 3DS has no sRGB: its colours and textures mix as they are
             return e;
         }
 
