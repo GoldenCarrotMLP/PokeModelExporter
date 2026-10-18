@@ -15,6 +15,10 @@ namespace PokeModelExporter.Scarlet
     // with EmissionColorLayerN * EmissionIntensityLayerN as glow. The game's shader mixes these at
     // runtime; we bake the result once (base color and emission PNGs) so any glTF renderer shows it.
     // The original parameters stay in the GLB's material extras for a future Unity shader.
+    //
+    // UV layout: the game samples a texture at uv x UVScaleOffset.xy + .zw (UVScaleOffsetNormal for normal maps) with the
+    // slot's sampler wrap per axis. Legends Z-A stores symmetric bodies as half textures, scale (2, 1) with U mirrored:
+    // such textures are unfolded to the full image the game shows (Unfold), so plain glTF UVs show it as the game does.
     public static class SvMaterialBaker
     {
         public sealed class Result
@@ -42,12 +46,28 @@ namespace PokeModelExporter.Scarlet
 
             foreach (var mat in model.Materials)
             {
+                // This material's view of a texture file: unfolded by the slot's UV scale and wrap when it has one. The
+                // file name gets the scale as a suffix then, so differently sampled copies of one file don't collide.
+                var unfolded = new Dictionary<string, (Bntx.Texture, string)>();
+                (Bntx.Texture Tex, string Name) View(string slot, string file, bool normal)
+                {
+                    var t = Load(file, normal);
+                    if (t == null) return (null, file);
+                    string key = slot + "|" + file;
+                    if (unfolded.TryGetValue(key, out var hit)) return hit;
+                    var (sx, sy) = UnfoldScale(mat, slot);
+                    return unfolded[key] = sx == 1 && sy == 1 ? (t, file)
+                        : (Unfold(t, sx, sy, Wrap(mat, slot)), System.IO.Path.GetFileNameWithoutExtension(file) + $"_uv{sx}x{sy}.bntx");
+                }
+                Bntx.Texture LoadSlot(string file, bool normal) => file == null ? null : View(SlotOf(mat, file), file, normal).Tex;
+                string NameOf(string file) => file == null ? null : View(SlotOf(mat, file), file, false).Name;
+
                 var map = MaterialMapping.Default(mat);
                 map.Unlit = mat.Shader == "Unlit";
                 mat.Textures.TryGetValue("BaseColorMap", out var baseFile);
                 mat.Textures.TryGetValue("LayerMaskMap", out var maskFile);
-                var baseTex = Load(baseFile, false);
-                var mask = Load(maskFile, false);
+                var baseTex = View("BaseColorMap", baseFile, false).Tex;
+                var mask = View("LayerMaskMap", maskFile, false).Tex;
 
                 if (mask != null && HasLayers(mat))
                 {
@@ -55,7 +75,7 @@ namespace PokeModelExporter.Scarlet
                     // sibling *_msk texture (eye_lym -> eye_msk), used when the material enables a highlight.
                     Bntx.Texture highlight = null;
                     if (HasHighlight(mat) && maskFile.Contains("_lym"))
-                        highlight = Load(maskFile.Replace("_lym", "_msk"), false);
+                        highlight = View("LayerMaskMap", maskFile.Replace("_lym", "_msk"), false).Tex;
                     var (color, emission) = BakeLayers(mat, baseTex, mask, highlight);
                     string colorName = mat.Name + "_color.png";
                     result.Textures[colorName] = Png.Encode(color, mask.Width, mask.Height);
@@ -69,37 +89,36 @@ namespace PokeModelExporter.Scarlet
                 }
                 else if (baseTex != null)
                 {
-                    result.Textures[baseFile] = Png.Encode(baseTex.Rgba, baseTex.Width, baseTex.Height);
+                    string name = NameOf(baseFile);
+                    result.Textures[name] = Png.Encode(baseTex.Rgba, baseTex.Width, baseTex.Height);
+                    map.BaseColorTexture = name;
                 }
 
                 // PBR: roughness / AO / metallic maps packed into one glTF ORM texture.
-                if (!map.Unlit) BakeOrm(mat, map, Load, result);
+                if (!map.Unlit) BakeOrm(mat, map, LoadSlot, NameOf, result);
 
                 if (map.NormalTexture != null && !map.Unlit)
                 {
-                    var n = Load(map.NormalTexture, normal: true);
-                    if (n != null) result.Textures[map.NormalTexture] = Png.Encode(n.Rgba, n.Width, n.Height);
+                    var (n, name) = View("NormalMap", map.NormalTexture, true);
+                    if (n != null) result.Textures[map.NormalTexture = name] = Png.Encode(n.Rgba, n.Width, n.Height);
                     else map.NormalTexture = null;
                 }
-                if (engineMaps) AddEngineMaps(mat, map, Load, result, layered: mask != null && HasLayers(mat));
+                if (engineMaps) AddEngineMaps(mat, map, View, result, layered: mask != null && HasLayers(mat));
                 result.Mappings[mat.Name] = map;
             }
             return result;
         }
 
-        static void AddEngineMaps(MaterialData m, MaterialMapping map, Func<string, bool, Bntx.Texture> load, Result result, bool layered)
+        static void AddEngineMaps(MaterialData m, MaterialMapping map, Func<string, string, bool, (Bntx.Texture Tex, string Name)> view, Result result, bool layered)
         {
             void Add(string slot, bool normal = false)
             {
                 if (!m.Textures.TryGetValue(slot, out var file) || !IsEnabled(m, slot)) return;
+                var (t, name) = view(slot, file, normal);
+                if (t == null) return;
                 // Own key, never shared with a glTF slot's copy of the same file (those may be read as sRGB).
-                string key = "map_" + file;
-                if (!result.Textures.ContainsKey(key))
-                {
-                    var t = load(file, normal);
-                    if (t == null) return;
-                    result.Textures[key] = Png.Encode(t.Rgba, t.Width, t.Height);
-                }
+                string key = "map_" + name;
+                if (!result.Textures.ContainsKey(key)) result.Textures[key] = Png.Encode(t.Rgba, t.Width, t.Height);
                 map.Maps[slot] = key;
             }
             Add("SSSMaskMap");
@@ -118,7 +137,7 @@ namespace PokeModelExporter.Scarlet
         // RoughnessMap / MetallicMap -> one glTF metallic-roughness texture (G roughness, B metallic).
         // All are single-channel BC4 maps (value in R). Without maps, the material's Roughness /
         // Metallic floats become the factors.
-        static void BakeOrm(MaterialData m, MaterialMapping map, Func<string, bool, Bntx.Texture> load, Result result)
+        static void BakeOrm(MaterialData m, MaterialMapping map, Func<string, bool, Bntx.Texture> load, Func<string, string> nameOf, Result result)
         {
             m.Textures.TryGetValue("AOMap", out var aoFile);
             m.Textures.TryGetValue("RoughnessMap", out var roughFile);
@@ -131,8 +150,9 @@ namespace PokeModelExporter.Scarlet
 
             if (ao != null)
             {
-                result.Textures[aoFile] = Png.Encode(ao.Rgba, ao.Width, ao.Height); // gray: R = G = B = AO
-                map.OcclusionTexture = aoFile;
+                string aoName = nameOf(aoFile);
+                result.Textures[aoName] = Png.Encode(ao.Rgba, ao.Width, ao.Height); // gray: R = G = B = AO
+                map.OcclusionTexture = aoName;
             }
             if (rough == null && metal == null) return;
 
@@ -173,6 +193,54 @@ namespace PokeModelExporter.Scarlet
             return extra;
         }
 
+        // The slot a file is used in by this material (the first one), for its UV scale and wrap.
+        static string SlotOf(MaterialData m, string file)
+        {
+            foreach (var kv in m.Textures) if (kv.Value == file) return kv.Key;
+            return null;
+        }
+
+        // How many times a slot's texture repeats across the mesh's 0..1 UVs: the whole-number UV scale with no offset
+        // (Z-A bodies: (2, 1)). Anything else (fractions, offsets: eyes look around by moving theirs) stays (1, 1).
+        static (int X, int Y) UnfoldScale(MaterialData m, string slot)
+        {
+            if (slot == null) return (1, 1);
+            bool normal = slot == "NormalMap";
+            if (normal && m.ShaderOptions.TryGetValue("EnableUVScaleOffsetNormal", out var on) && on == "False") return (1, 1);
+            if (!m.Colors.TryGetValue(normal ? "UVScaleOffsetNormal" : "UVScaleOffset", out var s)) return (1, 1);
+            if (Math.Abs(s.Z) > 1e-4f || Math.Abs(s.W) > 1e-4f) return (1, 1);
+            static int Whole(float v) => v >= 1 && v <= 4 && Math.Abs(v - Math.Round(v)) < 1e-4f ? (int)Math.Round(v) : 1;
+            return (Whole(s.X), Whole(s.Y));
+        }
+
+        static (uint U, uint V) Wrap(MaterialData m, string slot) => slot != null && m.Wraps.TryGetValue(slot, out var w) ? w : (0u, 0u);
+
+        // The texture as the game shows it over 0..1 UVs when sampling at uv x (sx, sy): sx x sy tiles, each axis repeated,
+        // mirrored on odd tiles (6), mirrored once then clamped (7), or clamped to the edge (1).
+        public static Bntx.Texture Unfold(Bntx.Texture t, int sx, int sy, (uint U, uint V) wrap)
+        {
+            int w = t.Width, h = t.Height, W = w * sx, H = h * sy;
+            static int Fold(int i, int n, uint mode)
+            {
+                int tile = i / n, local = i % n;
+                switch (mode)
+                {
+                    case 6: return tile % 2 == 1 ? n - 1 - local : local;
+                    case 7: return tile == 0 ? local : tile == 1 ? n - 1 - local : 0;
+                    case 1: return tile == 0 ? local : n - 1;
+                    default: return local;
+                }
+            }
+            var rgba = new byte[W * H * 4];
+            for (int y = 0; y < H; y++)
+            {
+                int row = Fold(y, h, wrap.V);
+                for (int x = 0; x < W; x++)
+                    Buffer.BlockCopy(t.Rgba, (row * w + Fold(x, w, wrap.U)) * 4, rgba, (y * W + x) * 4, 4);
+            }
+            return new Bntx.Texture { Width = W, Height = H, Format = t.Format, Rgba = rgba, Channels = t.Channels };
+        }
+
         static bool HasHighlight(MaterialData m) =>
             m.ShaderOptions.TryGetValue("EnableHighlight", out var h) && h == "True" &&
             (m.Colors.ContainsKey("EmissionColorLayer5") || m.Colors.ContainsKey("BaseColorLayer5"));
@@ -190,6 +258,10 @@ namespace PokeModelExporter.Scarlet
         // HDR colors (flames go up to 4.0) are tone-mapped so their excess brightness reads as glow.
         static (byte[] color, byte[] emission) BakeLayers(MaterialData m, Bntx.Texture baseTex, Bntx.Texture mask, Bntx.Texture highlight)
         {
+            // Legends Z-A's IkCharacter colours are linear: mixed with the (sRGB) base in linear space, back to sRGB after
+            // (Lucario's chest layer 0.515, 0.49, 0.21 is its cream fur that way, a dark olive used as is). Scarlet/Violet's
+            // layered materials stay as they were reviewed (the colours used as they are).
+            bool linear = m.Shader == "IkCharacter";
             int w = mask.Width, h = mask.Height;
             var color = new byte[w * h * 4];
             var emission = new byte[w * h * 4];
@@ -214,15 +286,29 @@ namespace PokeModelExporter.Scarlet
             {
                 int p = (y * w + x) * 4;
                 var b = Sample(baseTex, (x + 0.5f) / w, (y + 0.5f) / h);
+                if (linear) b = ToLinear(b);
                 var c = b;
                 var e = Vector3.Zero;
+                // The layers' colours mixed by their share of the mask, then over the base by the total: where two
+                // layers meet (half one, half the other) the edge goes straight from one colour to the next; applied one
+                // after another, a quarter of the (white) base showed through as a pale seam along every boundary.
+                var mix = Vector3.Zero;
+                float total = 0;
                 for (int i = 0; i < 4; i++)
                 {
                     float weight = Math.Min(1f, mask.Rgba[p + i] / 255f * scales[i]);
                     if (weight <= 0) continue;
                     if (layers[i] is Vector4 layer)
-                        c = Vector4.Lerp(c, new Vector4(b.X * layer.X, b.Y * layer.Y, b.Z * layer.Z, b.W), weight);
+                    {
+                        mix += new Vector3(layer.X, layer.Y, layer.Z) * weight;
+                        total += weight;
+                    }
                     e += glow[i] * weight;
+                }
+                if (total > 0)
+                {
+                    var tint = mix / total;
+                    c = Vector4.Lerp(c, new Vector4(b.X * tint.X, b.Y * tint.Y, b.Z * tint.Z, b.W), Math.Min(1f, total));
                 }
                 if (highlight != null)
                 {
@@ -238,6 +324,7 @@ namespace PokeModelExporter.Scarlet
                     }
                 }
                 var mapped = ToneMap(new Vector3(c.X, c.Y, c.Z));
+                if (linear) mapped = ToSrgb(mapped);
                 c = new Vector4(mapped, c.W);
                 color[p] = ToByte(c.X); color[p + 1] = ToByte(c.Y); color[p + 2] = ToByte(c.Z); color[p + 3] = ToByte(c.W);
                 emission[p] = ToByte(e.X * c.X); emission[p + 1] = ToByte(e.Y * c.Y); emission[p + 2] = ToByte(e.Z * c.Z); emission[p + 3] = 255;
@@ -245,6 +332,11 @@ namespace PokeModelExporter.Scarlet
             }
             return (color, anyEmission ? emission : null);
         }
+
+        static float LinearOf(float c) => c <= 0.04045f ? c / 12.92f : MathF.Pow((c + 0.055f) / 1.055f, 2.4f);
+        static float SrgbOf(float c) => c <= 0.0031308f ? c * 12.92f : 1.055f * MathF.Pow(c, 1 / 2.4f) - 0.055f;
+        static Vector4 ToLinear(Vector4 c) => new Vector4(LinearOf(c.X), LinearOf(c.Y), LinearOf(c.Z), c.W);
+        static Vector3 ToSrgb(Vector3 c) => new Vector3(SrgbOf(Math.Max(0, c.X)), SrgbOf(Math.Max(0, c.Y)), SrgbOf(Math.Max(0, c.Z)));
 
         // Keeps hue for colors brighter than 1: the excess spills into the other channels, the way a
         // bright emissive looks with bloom (4.0 red -> hot red-orange, 2.5 orange -> yellow).

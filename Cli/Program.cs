@@ -122,7 +122,7 @@ switch (rest[0])
                 for (int v = 0; v < 4; v++)
                 {
                     string id = $"pm{n:0000}_{f:00}_{v:00}";
-                    string path = $"pokemon/data/pm{n:0000}/{id}/{id}.trmdl";
+                    string path = $"{(archive.Contains("ik_pokemon/catalog/catalog/poke_resource_table.trpmcatalog") ? "ik_pokemon" : "pokemon")}/data/pm{n:0000}/{id}/{id}.trmdl";
                     if (!archive.Contains(path)) continue;
                     Console.WriteLine(id);
                     found++;
@@ -177,7 +177,7 @@ switch (rest[0])
 
     case "catalog": // catalog [species...]: the game's species -> model table (pokemon/catalog/.../poke_resource_table.trpmcatalog)
     {
-        var cat = FbTable.Root(archive.Read("pokemon/catalog/catalog/poke_resource_table.trpmcatalog"));
+        var cat = FbTable.Root(archive.Read(SvCatalog.Layouts.Select(l => l.Catalog).First(archive.Contains)));
         var entries = cat.Vector(1);
         var wanted = new HashSet<int>(rest.Skip(1).Select(int.Parse));
         Console.Error.WriteLine($"{entries.Length} catalog entries");
@@ -201,7 +201,7 @@ switch (rest[0])
     case "personal": // personal [national]: every species/form of the game's personal table (raw fields for research), tab-separated
     {
         var entries = FbTable.Root(archive.Read(SvPersonal.Path)).Vector(0);
-        var catalog = new SvCatalog(archive.Read(SvCatalog.Path));
+        var catalog = SvCatalog.Open(archive.Read);
         var models = new HashSet<(int, int)>(catalog.Entries.Select(c => (c.Species, c.Form)));
         Console.WriteLine("national	form	internal	present	model	stats	field:u8/u16 for f3..f32");
         for (int i = 0; i < entries.Length; i++)
@@ -252,7 +252,7 @@ switch (rest[0])
     {
         int o = rest.IndexOf("--out");
         string outFile = Path.GetFullPath(o >= 0 ? rest[o + 1] : "model.glb");
-        var catalog = new SvCatalog(archive.Read(SvCatalog.Path));
+        var catalog = SvCatalog.Open(archive.Read);
         var entry = FindEntry(catalog, archive, rest);
         var model = LoadModelFrom(archive, rest, out string folder);
         string dir = folder;
@@ -292,7 +292,7 @@ switch (rest[0])
         // Lower-detail meshes, only on request: same skeleton and materials, no clips.
         if (rest.Contains("--lods"))
         {
-            int lods = TrinityModelReader.LodCount(archive.Read(SvCatalog.DataRoot + entry.ModelPath));
+            int lods = TrinityModelReader.LodCount(archive.Read(entry.DataRoot + entry.ModelPath));
             for (int lod = 1; lod < lods; lod++)
             {
                 var lodModel = TrinityModelReader.Read(Path.GetFileName(entry.ModelPath), read, shiny: rest.Contains("--shiny"), lod: lod, locatorFiles: entry.LocatorFiles());
@@ -308,7 +308,7 @@ switch (rest[0])
         if (!rest.Contains("--no-sidecar"))
         {
             var schemas = new SchemaCache(rest);
-            string json = SvSidecar.Build(entry, "scarlet-violet", read, schemas.Get, folderFiles);
+            string json = SvSidecar.Build(entry, catalog.Game, read, schemas.Get, folderFiles);
             string sidecar = Path.ChangeExtension(outFile, ".json");
             File.WriteAllText(sidecar, json);
             Console.WriteLine($"{json.Length} chars -> {sidecar}");
@@ -318,11 +318,11 @@ switch (rest[0])
 
     case "locators": // locators <national dex>: every effect-locator node (name, local parent, effect_node bone, transform)
     {
-        var catalog = new SvCatalog(archive.Read(SvCatalog.Path));
+        var catalog = SvCatalog.Open(archive.Read);
         var entry = FindEntry(catalog, archive, rest);
         foreach (var file in entry.LocatorFiles())
         {
-            var data = archive.Read(SvCatalog.DataRoot + entry.Folder + file);
+            var data = archive.Read(entry.DataRoot + entry.Folder + file);
             Console.WriteLine($"{file}: {(data == null ? "missing" : "")}");
             if (data == null) continue;
             var nodes = FbTable.Root(data).Vector(1);
@@ -339,10 +339,10 @@ switch (rest[0])
     }
     case "bones": // bones <national dex> [names...]: stored bone matrices vs. our computed bind pose
     {
-        var catalog = new SvCatalog(archive.Read(SvCatalog.Path));
+        var catalog = SvCatalog.Open(archive.Read);
         var entry = FindEntry(catalog, archive, rest);
-        string folder = SvCatalog.DataRoot + entry.Folder;
-        var mdl = FbTable.Root(archive.Read(SvCatalog.DataRoot + entry.ModelPath));
+        string folder = entry.DataRoot + entry.Folder;
+        var mdl = FbTable.Root(archive.Read(entry.DataRoot + entry.ModelPath));
         var skl = FbTable.Root(archive.Read(folder + mdl.Table(2).String(0)));
         var nodes = skl.Vector(1);
         var bones = skl.Vector(2);
@@ -454,14 +454,14 @@ switch (rest[0])
 
     case "skeletons": // skeletons: every catalog model's segment-scale-compensate flags (trskl bones[].inherit_position)
     {
-        var catalog = new SvCatalog(archive.Read(SvCatalog.Path));
+        var catalog = SvCatalog.Open(archive.Read);
         var values = new Dictionary<int, int>();
         int models = 0, mixed = 0, none = 0;
         foreach (var path in catalog.Entries.Select(e => e.ModelPath).Distinct())
         {
-            var mdlData = archive.Read(SvCatalog.DataRoot + path);
+            var mdlData = archive.Read(catalog.DataRoot + path);
             if (mdlData == null) continue;
-            string dir = SvCatalog.DataRoot + path.Substring(0, path.LastIndexOf('/') + 1);
+            string dir = catalog.DataRoot + path.Substring(0, path.LastIndexOf('/') + 1);
             var sklData = archive.Read(dir + FbTable.Root(mdlData).Table(2).String(0));
             if (sklData == null) continue;
             var bones = FbTable.Root(sklData).Vector(2);
@@ -972,7 +972,8 @@ switch (rest[0])
             }
 
         // Mesh-level data the reader skips.
-        var mdl = FbTable.Root(archive.Read(SvCatalog.DataRoot + new SvCatalog(archive.Read(SvCatalog.Path)).Find(int.Parse(rest[1])).ModelPath));
+        var auditEntry = SvCatalog.Open(archive.Read).Find(int.Parse(rest[1]));
+        var mdl = FbTable.Root(archive.Read(auditEntry.DataRoot + auditEntry.ModelPath));
         Console.WriteLine($"LOD mesh files: {mdl.Vector(1).Length} (exported: 1)");
         var msh = FbTable.Root(archive.Read(folder + mdl.Vector(1).Table(0).String(0)));
         var shapes = msh.Vector(1);
@@ -1010,9 +1011,9 @@ static ModelData LoadModel(TrinityArchive archive, List<string> rest) => LoadMod
 
 static ModelData LoadModelFrom(TrinityArchive archive, List<string> rest, out string folder)
 {
-    var catalog = new SvCatalog(archive.Read(SvCatalog.Path));
+    var catalog = SvCatalog.Open(archive.Read);
     var entry = FindEntry(catalog, archive, rest);
-    folder = SvCatalog.DataRoot + entry.Folder;
+    folder = entry.DataRoot + entry.Folder;
     Console.Error.WriteLine($"#{rest[1]} -> {folder}");
     string dir = folder;
     return TrinityModelReader.Read(entry.ModelPath.Substring(entry.Folder.Length), name => archive.Read(dir + name),

@@ -40,7 +40,8 @@ if "--show-ao" in sys.argv:
         nt.links.new(mul.outputs[2], base)
         print("AO applied to", mat.name)
 
-meshes = [o for o in scene.objects if o.type == 'MESH']
+# (not the importer's bone display shape, an icosphere 2 m across, which throws the framing off)
+meshes = [o for o in scene.objects if o.type == 'MESH' and not o.name.startswith('Icosphere')]
 deps = bpy.context.evaluated_depsgraph_get()
 pts = []
 for o in meshes:

@@ -25,7 +25,7 @@ namespace PokeModelExporter.Scarlet
         {
             _oodle = new Oodle(oodleDll);
             Archive = new TrinityArchive(arcFolder, _oodle);
-            Catalog = new SvCatalog(Archive.Read(SvCatalog.Path));
+            Catalog = SvCatalog.Open(Archive.Read) ?? throw new FileNotFoundException("No Pokemon catalog (pokemon/ or ik_pokemon/) in " + arcFolder);
             Personal = new SvPersonal(Archive.Read(SvPersonal.Path));
             var fd = new FileInfo(Path.Combine(arcFolder, "data.trpfd"));
             Fingerprint = $"{fd.Length}-{fd.LastWriteTimeUtc.Ticks}";
@@ -79,7 +79,7 @@ namespace PokeModelExporter.Scarlet
         // A catalog entry directly (models that aren't Pokemon, like the Substitute doll).
         public Result Export(SvCatalog.Entry entry, Options options)
         {
-            string folder = SvCatalog.DataRoot + entry.Folder;
+            string folder = entry.DataRoot + entry.Folder;
             Func<string, byte[]> read = file => Archive.Read(folder + file);
 
             var model = TrinityModelReader.Read(entry.ModelPath.Substring(entry.Folder.Length), read, shiny: options.Shiny, locatorFiles: entry.LocatorFiles());

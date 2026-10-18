@@ -3,17 +3,36 @@ using PokeModelExporter.Formats;
 
 namespace PokeModelExporter.Scarlet
 {
-    // Scarlet/Violet's own species -> model table (pokemon/catalog/catalog/poke_resource_table.trpmcatalog,
-    // schema pkZukan/PokeDocs SV/Flatbuffers/resources/trpmcatalog.fbs). Model folders use internal
-    // numbers, not the National Dex (Braixen #654 lives in pm0718), so this is the only reliable map.
+    // A Trinity game's own species -> model table (<root>/catalog/catalog/poke_resource_table.trpmcatalog, schema
+    // pkZukan/PokeDocs SV/Flatbuffers/resources/trpmcatalog.fbs; Legends Z-A's adds a defence_path at the end). Model folders
+    // use internal numbers, not the National Dex (Braixen #654 lives in pm0718), so this is the only reliable map.
+    // Scarlet/Violet keeps Pokemon under pokemon/, Legends Z-A under ik_pokemon/ (Open finds which).
     public sealed class SvCatalog
     {
-        public const string Path = "pokemon/catalog/catalog/poke_resource_table.trpmcatalog";
-        public const string DataRoot = "pokemon/data/";
+        public static readonly (string Catalog, string DataRoot, string Game)[] Layouts =
+        {
+            ("pokemon/catalog/catalog/poke_resource_table.trpmcatalog", "pokemon/data/", "scarlet-violet"),
+            ("ik_pokemon/catalog/catalog/poke_resource_table.trpmcatalog", "ik_pokemon/data/", "legends-za"),
+        };
+
+        // Where this game's model folders are ("pokemon/data/"), and which game it is.
+        public string DataRoot { get; }
+        public string Game { get; }
+
+        // The catalog of whichever layout the archive has; null when none.
+        public static SvCatalog Open(System.Func<string, byte[]> read)
+        {
+            foreach (var (catalog, root, game) in Layouts)
+                if (read(catalog) is byte[] data) return new SvCatalog(data, root, game);
+            return null;
+        }
 
         public sealed record Entry(int Species, int Form, int Gender, string ModelPath, string MaterialTablePath,
             string ConfigPath, IReadOnlyList<string> AnimationPaths, IReadOnlyList<string> LocatorPaths, string IconPath)
         {
+            // The game's data root this entry's paths are under ("pokemon/data/").
+            public string DataRoot { get; init; } = "pokemon/data/";
+
             // Folder holding the model and its animations, under pokemon/data/ ("pm0718/pm0718_00_00/").
             public string Folder => ModelPath.Substring(0, ModelPath.LastIndexOf('/') + 1);
 
@@ -33,8 +52,10 @@ namespace PokeModelExporter.Scarlet
 
         public IReadOnlyList<Entry> Entries => _entries;
 
-        public SvCatalog(byte[] data)
+        public SvCatalog(byte[] data, string dataRoot = "pokemon/data/", string game = "scarlet-violet")
         {
+            DataRoot = dataRoot;
+            Game = game;
             var root = FbTable.Root(data);
             var table = root.Vector(1);
             for (int i = 0; i < table.Length; i++)
@@ -47,7 +68,7 @@ namespace PokeModelExporter.Scarlet
                 var locators = new List<string>();
                 var locVector = e.Vector(5);
                 for (int l = 0; l < locVector.Length; l++) locators.Add(locVector.Table(l).String(2));
-                _entries.Add(new Entry(sp.U16(0), sp.U16(1), sp.U8(2), e.String(1), e.String(2), e.String(3), anims, locators, e.String(6)));
+                _entries.Add(new Entry(sp.U16(0), sp.U16(1), sp.U8(2), e.String(1), e.String(2), e.String(3), anims, locators, e.String(6)) { DataRoot = dataRoot });
             }
         }
 

@@ -126,6 +126,8 @@ namespace PokeModelExporter.Model
         public Dictionary<string, float> Floats = new Dictionary<string, float>();
         public Dictionary<string, Vector4> Colors = new Dictionary<string, Vector4>();
         public Dictionary<string, string> ShaderOptions = new Dictionary<string, string>();
+        // Per texture slot, how its sampler wraps U and V (trmtr UVWrapMode: 0 repeat, 1 clamp, 6 mirror, 7 mirror once).
+        public Dictionary<string, (uint U, uint V)> Wraps = new Dictionary<string, (uint, uint)>();
         public string AlphaType;
     }
 }

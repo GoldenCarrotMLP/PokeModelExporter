@@ -59,7 +59,7 @@ namespace PokeModelExporter.Scarlet
             w.Name("game").Value(game);
             w.Name("pokemon").BeginObject()
                 .Name("species").Value(entry.Species).Name("form").Value(entry.Form).Name("gender").Value(entry.Gender)
-                .Name("folder").Value(SvCatalog.DataRoot + entry.Folder).EndObject();
+                .Name("folder").Value(entry.DataRoot + entry.Folder).EndObject();
             w.Name("catalog").BeginObject()
                 .Name("model").Value(entry.ModelPath).Name("materialTable").Value(entry.MaterialTablePath)
                 .Name("config").Value(entry.ConfigPath).Name("icon").Value(entry.IconPath);

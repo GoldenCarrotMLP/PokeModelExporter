@@ -165,8 +165,15 @@ namespace PokeModelExporter.Scarlet
                         mat.ShaderOptions[values.Table(v).String(0)] = values.Table(v).String(1);
                 }
                 var textures = m.Vector(2);
+                var samplers = m.Vector(3);
                 for (int t = 0; t < textures.Length; t++)
-                    mat.Textures[textures.Table(t).String(0)] = textures.Table(t).String(1);
+                {
+                    var tex = textures.Table(t);
+                    mat.Textures[tex.String(0)] = tex.String(1);
+                    // Each texture names its sampler (texture_slot); SamplerState fields 9/10 are repeat_u / repeat_v.
+                    int slot = (int)tex.U32(2);
+                    if (slot < samplers.Length) mat.Wraps[tex.String(0)] = (samplers.Table(slot).U32(9), samplers.Table(slot).U32(10));
+                }
                 var floats = m.Vector(4);
                 for (int f = 0; f < floats.Length; f++)
                     mat.Floats[floats.Table(f).String(0)] = floats.Table(f).F32(1);
