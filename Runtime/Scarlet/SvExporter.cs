@@ -26,7 +26,7 @@ namespace PokeModelExporter.Scarlet
             _oodle = new Oodle(oodleDll);
             Archive = new TrinityArchive(arcFolder, _oodle);
             Catalog = SvCatalog.Open(Archive.Read) ?? throw new FileNotFoundException("No Pokemon catalog (pokemon/ or ik_pokemon/) in " + arcFolder);
-            Personal = new SvPersonal(Archive.Read(SvPersonal.Path));
+            Personal = new SvPersonal(Archive.Read(SvPersonal.Path), SvPersonal.FieldShift(Catalog.Game));
             var fd = new FileInfo(Path.Combine(arcFolder, "data.trpfd"));
             Fingerprint = $"{fd.Length}-{fd.LastWriteTimeUtc.Ticks}";
         }

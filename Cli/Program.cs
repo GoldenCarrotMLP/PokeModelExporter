@@ -592,7 +592,7 @@ switch (rest[0])
                 if (num > 0 && !ids.ContainsKey((num, forme))) ids[(num, forme)] = sp.Name;
             }
         // The game's internal species numbers -> national dex, from its own personal table.
-        var personal = new SvPersonal(archive.Read(SvPersonal.Path));
+        var personal = new SvPersonal(archive.Read(SvPersonal.Path), SvPersonal.FieldShift(SvCatalog.Open(archive.Read)?.Game));
         var nationalOf = new Dictionary<int, int>();
         for (int national = 1; national <= 1025; national++)
         {
@@ -1034,7 +1034,7 @@ static SvCatalog.Entry FindEntry(SvCatalog catalog, TrinityArchive archive, List
     int species = int.Parse(rest[1]);
     int form = rest.Count > 2 && int.TryParse(rest[2], out int f) ? f : 0;
     int gender = rest.Count > 3 && int.TryParse(rest[3], out int g) ? g : 0;
-    var personal = new SvPersonal(archive.Read(SvPersonal.Path));
+    var personal = new SvPersonal(archive.Read(SvPersonal.Path), SvPersonal.FieldShift(SvCatalog.Open(archive.Read)?.Game));
     return catalog.Find(personal.CatalogSpecies(species, form), form, gender) ?? throw new InvalidOperationException($"#{species} is not in this game's catalog");
 }
 

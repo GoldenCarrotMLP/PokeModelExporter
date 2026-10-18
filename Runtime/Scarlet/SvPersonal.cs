@@ -36,8 +36,14 @@ namespace PokeModelExporter.Scarlet
         readonly Dictionary<int, List<int>> _forms = new Dictionary<int, List<int>>();
         readonly Dictionary<(int national, int form), (int growth, int catchRate)> _story = new Dictionary<(int, int), (int, int)>();
 
-        public SvPersonal(byte[] data)
+        // Legends Z-A's table has two fewer fields before the types: every field from type 1 on sits two places earlier
+        // (types 3/4, EXP group 8, catch rate 9, stats 20; checked on Lucario and its Megas, Pikachu).
+        public static int FieldShift(string game) => game == "legends-za" ? 2 : 0;
+
+        public SvPersonal(byte[] data, int fieldShift = 0)
         {
+            int statsField = StatsField - fieldShift, type1Field = Type1Field - fieldShift, type2Field = Type2Field - fieldShift;
+            int growthField = GrowthField - fieldShift, catchRateField = CatchRateField - fieldShift;
             var entries = FbTable.Root(data).Vector(0);
             for (int i = 0; i < entries.Length; i++)
             {
@@ -48,13 +54,13 @@ namespace PokeModelExporter.Scarlet
                 int index = System.BitConverter.ToUInt16(b, p), form = System.BitConverter.ToUInt16(b, p + 2);
                 var key = (System.BitConverter.ToUInt16(b, p + 4), form);
                 if (!_internal.ContainsKey(key)) _internal[key] = index;
-                int s = e.FieldPosition(StatsField);
+                int s = e.FieldPosition(statsField);
                 if (s != 0 && !_stats.ContainsKey(key)) _stats[key] = new int[] { b[s], b[s + 1], b[s + 2], b[s + 3], b[s + 4], b[s + 5] };
                 if (e.Bool(1)) _present.Add(key);
-                if (!_story.ContainsKey(key)) _story[key] = (e.U8(GrowthField), e.U8(CatchRateField));
+                if (!_story.ContainsKey(key)) _story[key] = (e.U8(growthField), e.U8(catchRateField));
                 if (!_types.ContainsKey(key))
                 {
-                    int t1 = e.U8(Type1Field), t2 = e.U8(Type2Field); // absent = 0 = Normal
+                    int t1 = e.U8(type1Field), t2 = e.U8(type2Field); // absent = 0 = Normal
                     if (t1 < TypeNames.Length && t2 < TypeNames.Length)
                         _types[key] = t1 == t2 ? new[] { TypeNames[t1] } : new[] { TypeNames[t1], TypeNames[t2] };
                     if (!_forms.TryGetValue(key.Item1, out var forms)) _forms[key.Item1] = forms = new List<int>();
