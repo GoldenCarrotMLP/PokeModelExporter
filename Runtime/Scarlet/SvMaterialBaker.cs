@@ -31,7 +31,8 @@ namespace PokeModelExporter.Scarlet
         // engineMaps: also keep the raw game maps an engine shader needs (MaterialMapping.Maps): SSS mask, eye coat
         // normal, displacement, the layer mask of eyes and Unlit layered materials, and the latter's (flames) base
         // map, so their HDR layer colours can be mixed at runtime instead of tone-mapped into the baked texture.
-        public static Result Bake(ModelData model, Func<string, byte[]> readTexture, bool engineMaps = false)
+        // unfoldAll: also every other texture slot (rim, specular, layer masks...) as the game samples it, for reference.
+        public static Result Bake(ModelData model, Func<string, byte[]> readTexture, bool engineMaps = false, bool unfoldAll = false)
         {
             var result = new Result();
             var decoded = new Dictionary<string, Bntx.Texture>();
@@ -41,7 +42,9 @@ namespace PokeModelExporter.Scarlet
                 string key = file + (normal ? "#n" : "");
                 if (decoded.TryGetValue(key, out var t)) return t;
                 var bytes = readTexture(file);
-                return decoded[key] = bytes == null ? null : Bntx.Read(bytes, normal);
+                if (bytes == null) return decoded[key] = null;
+                try { return decoded[key] = Bntx.Read(bytes, normal); }
+                catch (NotSupportedException) { return decoded[key] = null; } // e.g. Z-A's shared BC6H reflection probe
             }
 
             foreach (var mat in model.Materials)
@@ -104,6 +107,12 @@ namespace PokeModelExporter.Scarlet
                     else map.NormalTexture = null;
                 }
                 if (engineMaps) AddEngineMaps(mat, map, View, result, layered: mask != null && HasLayers(mat));
+                if (unfoldAll)
+                    foreach (var kv in mat.Textures)
+                    {
+                        var (t, name) = View(kv.Key, kv.Value, kv.Key.StartsWith("NormalMap"));
+                        if (t != null && name != kv.Value && !result.Textures.ContainsKey(name)) result.Textures[name] = Png.Encode(t.Rgba, t.Width, t.Height);
+                    }
                 result.Mappings[mat.Name] = map;
             }
             return result;
@@ -139,7 +148,8 @@ namespace PokeModelExporter.Scarlet
         // Metallic floats become the factors.
         static void BakeOrm(MaterialData m, MaterialMapping map, Func<string, bool, Bntx.Texture> load, Func<string, string> nameOf, Result result)
         {
-            m.Textures.TryGetValue("AOMap", out var aoFile);
+            // Scarlet/Violet names the slot AOMap, Legends Z-A OcclusionMap.
+            if (!m.Textures.TryGetValue("AOMap", out var aoFile)) m.Textures.TryGetValue("OcclusionMap", out aoFile);
             m.Textures.TryGetValue("RoughnessMap", out var roughFile);
             m.Textures.TryGetValue("MetallicMap", out var metalFile);
             var ao = load(aoFile, false);

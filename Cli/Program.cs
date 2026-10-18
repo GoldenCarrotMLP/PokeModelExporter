@@ -263,7 +263,7 @@ switch (rest[0])
 
         // Textures: plain maps decoded, layered materials (eyes, flames...) baked to color/emission;
         // everything else the materials, icons or folder hold kept as unreferenced images.
-        var baked = SvMaterialBaker.Bake(model, read);
+        var baked = SvMaterialBaker.Bake(model, read, unfoldAll: true);
         var extraNames = new List<string>();
         foreach (var mtr in new[] { "", "_rare", "_edit" }.Select(x => model.Name + x + ".trmtr"))
         {
