@@ -80,6 +80,8 @@ if (rest[0] == "ctrmotion") // ctrmotion <GARC file> <index> [--out <file.json>]
         (mot.OtherSections.Count > 0 ? ", unread sections " + string.Join(",", mot.OtherSections) : ""));
     foreach (var u in mot.Uvs) Console.WriteLine($"  uv {u.Material} unit {u.Unit}: " + string.Join(" ", u.Channels.Select((c, i) => !c.Animated ? "-" : c.Frames == null ? c.Constant.ToString("0.###") : $"{c.Frames.Length} keys")));
     foreach (var c in mot.Colors) Console.WriteLine($"  colour {c.Material} constant {c.Index}: " + string.Join(" ", c.Channels.Select(x => !x.Animated ? "-" : x.Frames == null ? x.Constant.ToString("0.###") : $"{x.Frames.Length} keys")));
+    foreach (var c in mot.Cameras) Console.WriteLine($"  camera {c.Name}: " + string.Join(" ", c.Channels.Select(x => !x.Animated ? "-" : x.Frames == null ? x.Constant.ToString("0.###") : $"{x.Frames.Length} keys")));
+    foreach (var l in mot.Lights) Console.WriteLine($"  light {l.Name} type {l.Type}/{l.Unknown} colour {l.Color:X8}: " + string.Join(" ", l.Channels.Select(x => !x.Animated ? "-" : x.Frames == null ? x.Constant.ToString("0.###") : $"{x.Frames.Length} keys")));
     int o = rest.IndexOf("--out");
     if (o >= 0) File.WriteAllText(rest[o + 1], mot.ToJson());
     return 0;

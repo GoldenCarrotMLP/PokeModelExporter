@@ -13,7 +13,12 @@ namespace PokeModelExporter.Ctr
     //   3 UVs       u32 materials, u32 names length, u32 tracks per material, names; per track u32 texture unit,
     //               u32 flags, u32 length and five channels: scale U / V, rotation, translation U / V
     //   5 colours   same layout as UVs; per track u32 constant index, flags, length, four channels R G B A
-    //   6 visibility, 7 material switches, 8 lights, 9 cameras (not read yet)
+    //   8 lights    u32 count, u32 names length, names; per light u32 type, u32 ?, u32 flags, u32 0, u32 length,
+    //               u32 RGBA colour, then ten channels (constant in every pack: position XYZ, direction XYZ, ...)
+    //   9 cameras   u32 count, u32 names length, names; per camera u32 flags, u32 0, u32 length, then ten channels:
+    //               near, far (cm), vertical field of view (radians), aspect, rotation XYZ (Euler, radians), position
+    //               XYZ (cm). Every camera (486) and light (183) section parses exactly.
+    //   6 visibility, 7 material switches (not read yet)
     // Each channel's 3-bit code (flags >> 3 x channel): 0 not animated, 1 constant 0, 2 constant 1, 3 a float,
     // 4 quantized Hermite keys (u32 count, frames as u8 (<= 255 frames) or u16, aligned to 4, value scale / offset,
     // slope scale / offset, then u16 value + u16 slope per key, each u16 / 65535 x scale + offset), 5 float keys
@@ -30,12 +35,16 @@ namespace PokeModelExporter.Ctr
         public sealed class BoneTrack { public string Bone; public Curve[] Channels = new Curve[9]; }
         public sealed class UvTrack { public string Material; public int Unit; public Curve[] Channels = new Curve[5]; }
         public sealed class ColorTrack { public string Material; public int Index; public Curve[] Channels = new Curve[4]; }
+        public sealed class CameraTrack { public string Name; public Curve[] Channels = new Curve[10]; }
+        public sealed class LightTrack { public string Name; public int Type, Unknown; public uint Color; public Curve[] Channels = new Curve[10]; }
 
         public int FrameCount;
         public bool Loop;
         public List<BoneTrack> Bones = new List<BoneTrack>();
         public List<UvTrack> Uvs = new List<UvTrack>();
         public List<ColorTrack> Colors = new List<ColorTrack>();
+        public List<CameraTrack> Cameras = new List<CameraTrack>();
+        public List<LightTrack> Lights = new List<LightTrack>();
         public List<int> OtherSections = new List<int>();
 
         public static bool IsMotion(byte[] d) => d != null && d.Length > 16 && BitConverter.ToUInt32(d, 0) == 0x00060000;
@@ -56,6 +65,8 @@ namespace PokeModelExporter.Ctr
                     case 1: ReadBones(d, s.At, m); break;
                     case 3: ReadTracks(d, s.At, m, 5, (name, index, curves) => m.Uvs.Add(new UvTrack { Material = name, Unit = index, Channels = curves })); break;
                     case 5: ReadTracks(d, s.At, m, 4, (name, index, curves) => m.Colors.Add(new ColorTrack { Material = name, Index = index, Channels = curves })); break;
+                    case 8: ReadLights(d, s.At, m); break;
+                    case 9: ReadCameras(d, s.At, m); break;
                     default: m.OtherSections.Add(s.Type); break;
                 }
             return m;
@@ -81,6 +92,39 @@ namespace PokeModelExporter.Ctr
                 for (int c = 0; c < 9; c++) t.Channels[c] = ReadCurve(d, ref q, (int)(flags >> (3 * c) & 7), m.FrameCount);
                 m.Bones.Add(t);
                 p += 8 + length;
+            }
+        }
+
+        static void ReadCameras(byte[] d, int o, GfMotion m)
+        {
+            int count = BitConverter.ToInt32(d, o), namesLength = BitConverter.ToInt32(d, o + 4);
+            var names = Names(d, o + 8, count);
+            int p = o + 8 + namesLength;
+            for (int i = 0; i < count; i++)
+            {
+                uint flags = BitConverter.ToUInt32(d, p); int length = BitConverter.ToInt32(d, p + 8);
+                var t = new CameraTrack { Name = names[i] };
+                int q = p + 12;
+                for (int c = 0; c < 10; c++) t.Channels[c] = ReadCurve(d, ref q, (int)(flags >> (3 * c) & 7), m.FrameCount);
+                m.Cameras.Add(t);
+                p += 12 + length;
+            }
+        }
+
+        static void ReadLights(byte[] d, int o, GfMotion m)
+        {
+            int count = BitConverter.ToInt32(d, o), namesLength = BitConverter.ToInt32(d, o + 4);
+            var names = Names(d, o + 8, count);
+            int p = o + 8 + namesLength;
+            for (int i = 0; i < count; i++)
+            {
+                var t = new LightTrack { Name = names[i], Type = BitConverter.ToInt32(d, p), Unknown = BitConverter.ToInt32(d, p + 4) };
+                uint flags = BitConverter.ToUInt32(d, p + 8); int length = BitConverter.ToInt32(d, p + 16);
+                t.Color = BitConverter.ToUInt32(d, p + 20);
+                int q = p + 24;
+                for (int c = 0; c < 10; c++) t.Channels[c] = ReadCurve(d, ref q, (int)(flags >> (3 * c) & 7), m.FrameCount);
+                m.Lights.Add(t);
+                p += 24 + length;
             }
         }
 
@@ -151,6 +195,16 @@ namespace PokeModelExporter.Ctr
             foreach (var u in Uvs) { w.BeginObject().Name("material").Value(u.Material).Name("unit").Value(u.Unit); Channels(w, u.Channels, uv); w.EndObject(); }
             w.EndArray().Name("colors").BeginArray();
             foreach (var c in Colors) { w.BeginObject().Name("material").Value(c.Material).Name("index").Value(c.Index); Channels(w, c.Channels, col); w.EndObject(); }
+            w.EndArray().Name("cameras").BeginArray();
+            string[] cam = { "near", "far", "fovy", "aspect", "rx", "ry", "rz", "tx", "ty", "tz" };
+            foreach (var c in Cameras) { w.BeginObject().Name("name").Value(c.Name); Channels(w, c.Channels, cam); w.EndObject(); }
+            w.EndArray().Name("lights").BeginArray();
+            string[] light = { "c0", "c1", "c2", "c3", "c4", "c5", "c6", "c7", "c8", "c9" };
+            foreach (var l in Lights)
+            {
+                w.BeginObject().Name("name").Value(l.Name).Name("type").Value(l.Type).Name("color").Value(l.Color.ToString("X8"));
+                Channels(w, l.Channels, light); w.EndObject();
+            }
             w.EndArray();
             if (OtherSections.Count > 0) { w.Name("unread").BeginArray(); foreach (int s in OtherSections) w.Value(s); w.EndArray(); }
             w.EndObject();
