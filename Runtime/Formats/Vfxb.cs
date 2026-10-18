@@ -20,11 +20,62 @@ namespace PokeModelExporter.Formats
         public Dictionary<ulong, string> TextureNames = new Dictionary<ulong, string>();
         public ArraySegment<byte> Bntx; // the textures, a whole BNTX file (empty when there are none)
         public Dictionary<ulong, BfresPrimitives.Primitive> Primitives = new Dictionary<ulong, BfresPrimitives.Primitive>();
+        byte[] _data;
+        Dictionary<int, string> _fragmentPrograms;
+
+        // A shader variation's compiled fragment program as NV assembly text (GRSN = BNSH: variation i -> program
+        // (+0x10) -> fragment code record (program slot 5) -> info (+0x8) -> text at info + 0x878), null when absent.
+        // The programs are the ground truth for what an emitter's shader does (Research/shaders.py reads the same).
+        public string FragmentProgram(int variation)
+        {
+            if (_fragmentPrograms == null)
+            {
+                _fragmentPrograms = new Dictionary<int, string>();
+                try { ReadPrograms(); } catch (Exception) { } // a file without (readable) shaders: no programs
+            }
+            return _fragmentPrograms.TryGetValue(variation, out var text) ? text : null;
+        }
+
+        void ReadPrograms()
+        {
+            var d = _data;
+            int grsn = IndexOf(d, "GRSN", 0);
+            if (grsn < 0) return;
+            int k = IndexOf(d, "BNSH", grsn);
+            if (k < 0) return;
+            int grsc = IndexOf(d, "grsc", k);
+            if (grsc < 0) return;
+            int count = BitConverter.ToInt32(d, grsc + 0x1C);
+            long array = BitConverter.ToInt64(d, grsc + 0x20);
+            for (int v = 0; v < count; v++)
+            {
+                long program = BitConverter.ToInt64(d, (int)(k + array + 0x40 * v + 0x10));
+                long code = BitConverter.ToInt64(d, (int)(k + program + 8 * 5));
+                if (code == 0) continue;
+                long info = BitConverter.ToInt64(d, (int)(k + code + 8));
+                int text = (int)(k + info + 0x878);
+                if (text + 4 > d.Length || Encoding.ASCII.GetString(d, text, 4) != "!!NV") continue;
+                int end = Array.IndexOf(d, (byte)0, text);
+                _fragmentPrograms[v] = Encoding.ASCII.GetString(d, text, (end < 0 ? d.Length : end) - text);
+            }
+        }
+
+        static int IndexOf(byte[] d, string magic, int from)
+        {
+            var m = Encoding.ASCII.GetBytes(magic);
+            for (int i = Math.Max(0, from); i + m.Length <= d.Length; i++)
+            {
+                int j = 0;
+                while (j < m.Length && d[i + j] == m[j]) j++;
+                if (j == m.Length) return i;
+            }
+            return -1;
+        }
 
         public static VfxbFile Read(byte[] data)
         {
             if (Encoding.ASCII.GetString(data, 0, 4) != "VFXB") throw new InvalidOperationException("not a VFXB file");
-            var file = new VfxbFile { Version = BitConverter.ToUInt16(data, 0x0A) };
+            var file = new VfxbFile { Version = BitConverter.ToUInt16(data, 0x0A), _data = data };
             if (file.Version != 22) throw new NotSupportedException($"VFXB version {file.Version} (only 22, Scarlet/Violet, is mapped)");
             int pos = BitConverter.ToUInt16(data, 0x16);
             while (true)

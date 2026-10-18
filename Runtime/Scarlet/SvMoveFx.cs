@@ -215,6 +215,15 @@ namespace PokeModelExporter.Scarlet
             foreach (var c in e.Children) ReportPrimitives(c, file, path, onPrimitive);
         }
 
+        static string Program(string fp)
+        {
+            if (fp == null) return null;
+            int pows = System.Text.RegularExpressions.Regex.Matches(fp, @"POW\.F32").Count;
+            if (fp.Contains("buf5[272]") && fp.Contains("buf6[1472]") && pows >= 2) return "jewel";
+            if (fp.Contains("buf5[256]") && pows >= 1 && fp.Contains("buf10[48]")) return "sheen";
+            return null;
+        }
+
         static bool Possible(TimelineGroup group)
         {
             foreach (var c in group.Conditions)
@@ -344,6 +353,12 @@ namespace PokeModelExporter.Scarlet
             // shader's per-emitter constants (alpha gain at 48, texture add at 52, edge colour + weight at 64..76,
             // found in its compiled fragment programs).
             w.Name("customShader").Value(e.CustomShaderIndex);
+            // Programs of SV's own shader (custom 1) told apart by their compiled fragment program (not by CSDP, laid out
+            // the same for all): "jewel" (the Terastal crystals: two normal-offset samples of texture 0 lerp texture 1 x a0
+            // toward c0, times (texture 2 + a1); facing^P.x keeps the body, c1 x (1-facing)^P.y lights the edges; opaque)
+            // and "sheen" (light flowing over them: texture 1 x lerp(c1, c0, texture 0.r), UVs pushed by texture 2 and a
+            // camera fresnel). P = CSDP bytes 48..60.
+            if (e.CustomShaderIndex == 1 && Program(file.FragmentProgram(e.ShaderIndex)) is string program) w.Name("program").Value(program);
             // Stripes (emitter plugins EP02 "stripe", EP03 "super stripe"): each particle draws a ribbon through its last
             // `history` frames of positions instead of its own quad (String Shot's threads, trails behind projectiles).
             // EP02 = 4 enums, a float, then the history length; EP03 = 6 enums, then the history length.
