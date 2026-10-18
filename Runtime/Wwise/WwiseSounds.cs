@@ -15,7 +15,8 @@ namespace PokeModelExporter.Wwise
     // Play targets may be sounds or switch containers (a game variable picks the child: SV's cries
     // PLAY_PV_<internal species> switch on voice type INDEX/ATK/SPATK/SAD/GLAD1..., some first on
     // FORM00..), random/sequence containers (one child per play: footsteps, whooshes; pick it with variant) and layer
-    // containers (every child at once).
+    // containers (every child at once). Sounds routed to the controller's vibration (Motion_Bus: HD rumble tracks, 4-channel
+    // low tones layered under SV's Terastal sounds) are left out: through speakers they sound like a synth.
     public sealed class WwiseSounds
     {
         readonly string _folder;
@@ -82,7 +83,7 @@ namespace PokeModelExporter.Wwise
 
         void Collect(Bank bank, uint id, uint[] wanted, List<Media> result, int depth)
         {
-            if (depth > 8 || !bank.Objects.TryGetValue(id, out var obj)) return;
+            if (depth > 8 || !bank.Objects.TryGetValue(id, out var obj) || ToMotion(bank, id, 0)) return;
             if (obj.Type == 2) // Sound
             {
                 var s = new Reader(bank.Data, obj.Offset + 4);
@@ -109,6 +110,54 @@ namespace PokeModelExporter.Wwise
             }
             else if (obj.Type == 9 && LayerChildren(bank, obj, id) is uint[] layers)
                 foreach (uint child in layers) Collect(bank, child, wanted, result, depth + 1);
+        }
+
+        static readonly uint[] MotionBuses = { Hash("Motion_Bus"), Hash("Master Motion Bus"), Hash("Motion Factory Bus") };
+
+        // Whether a node plays on the vibration bus: its own output bus, else its parent's (actor-mixers carry it), and that
+        // bus or one above it (Init.bnk) is a motion bus.
+        bool ToMotion(Bank bank, uint id, int depth)
+        {
+            if (depth > 16 || !bank.Objects.TryGetValue(id, out var obj)) return false;
+            if (!(Routing(bank, obj) is (uint bus, uint parent))) return false;
+            if (bus != 0)
+            {
+                var init = LoadBank("Init");
+                for (int up = 0; up < 8 && bus != 0; up++)
+                {
+                    if (Array.IndexOf(MotionBuses, bus) >= 0) return true;
+                    if (init == null || !init.Objects.TryGetValue(bus, out var b) || b.Length < 8) return false;
+                    bus = BitConverter.ToUInt32(init.Data, b.Offset + 4); // a bus's parent bus
+                }
+                return false;
+            }
+            return parent != 0 && ToMotion(bank, parent, depth + 1);
+        }
+
+        // A node's output bus override and its parent (NodeBaseParams, bank version 140): after a Sound's source data,
+        // the effect list, the metadata effect list and the attachment flag. Null when it doesn't parse.
+        static (uint Bus, uint Parent)? Routing(Bank bank, (byte Type, int Offset, int Length) obj)
+        {
+            if (obj.Type != 2 && obj.Type != 5 && obj.Type != 6 && obj.Type != 7 && obj.Type != 9) return null;
+            var d = bank.Data;
+            int p = obj.Offset + 4, end = obj.Offset + obj.Length;
+            if (obj.Type == 2)
+            {
+                uint plugin = BitConverter.ToUInt32(d, p);
+                p += 14; // plugin, stream type, media ID, in-memory size, source bits
+                if ((plugin & 0x0F) == 2) p += 4 + (int)BitConverter.ToUInt32(d, p); // a source plugin's parameters
+            }
+            if (p + 2 > end) return null;
+            int fx = d[p + 1];
+            p += 2 + (fx > 0 ? 1 + 7 * fx : 0); // override flag, count, bypass bits, {index, ID, share set, rendered}
+            if (p + 2 > end) return null;
+            int meta = d[p + 1];
+            p += 2 + 6 * meta;                  // override flag, count, {index, ID, share set}
+            p += 1;                             // override attachment params
+            if (p + 8 > end) return null;
+            uint parent = BitConverter.ToUInt32(d, p + 4);
+            if (parent != 0 && !bank.Objects.ContainsKey(parent)) return null; // not where we thought: don't guess
+            return (BitConverter.ToUInt32(d, p), parent);
         }
 
         // A random/sequence container's playlist: it ends the object, a 16-bit count N then N { child ID, weight }, right
