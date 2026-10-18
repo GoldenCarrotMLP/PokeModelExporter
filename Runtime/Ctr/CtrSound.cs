@@ -349,7 +349,7 @@ namespace PokeModelExporter.Ctr
                     case 0x8A: t.Calls.Push(t.Pc + 3); t.Pc = seq.DataStart + U24(d, t.Pc); return;
                     case 0xFD: if (t.Calls.Count > 0) t.Pc = t.Calls.Pop(); else t.Done = true; return;
                     case 0xFE: t.Pc += 2; return; // allocate tracks
-                    case 0xFF: t.Done = true; return;
+                    case 0xFF: End(t, time); return;
                     case 0xFB: t.Attack = t.Decay = t.Sustain = t.Release = -1; return;
                     case 0xFC: // loop end: count 0 = forever, which ends a sound effect's track here
                         if (t.LoopStart >= 0 && t.LoopCount > 1) { t.LoopCount--; t.Pc = t.LoopStart; }
@@ -387,6 +387,16 @@ namespace PokeModelExporter.Ctr
                     return;
                 }
                 t.Done = true; Unknown++; Debug?.Invoke($"unknown command {c:X2} at {t.Pc - 1:X}"); // stop rather than read garbage
+            }
+
+            // A track that ends releases the notes it still holds: a note of length 0 lasts until its track's end (the
+            // waits before `fin` are the sound's designed length), or until the script stops a looping sound whose track
+            // never ends.
+            void End(Track t, double time)
+            {
+                t.Done = true;
+                foreach (var n in _notes)
+                    if (n.Track == t && n.Length == double.MaxValue) n.Length = Math.Max(0, time - n.Time);
             }
 
             void Note(Track t, int key, int velocity, int lengthTicks, double time)
