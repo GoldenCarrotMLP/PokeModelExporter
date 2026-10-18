@@ -99,6 +99,61 @@ if (rest[0] == "ctrsound") // ctrsound <bcsar> <index or script id>... --out <di
     return 0;
 }
 
+if (rest[0] == "spbd") // spbd <GARC a/0/8/7> <index> [--out <dir>]: an Ultra Sun/Moon particle resource as effect JSON + texture PNGs
+{
+    var garc = PokeModelExporter.Ctr.Garc.Read(rest[1]);
+    int index = int.Parse(rest[2]);
+    var sp = PokeModelExporter.Ctr.Spbd.Read(PokeModelExporter.Ctr.Garc.File0(garc, index), "usum" + index);
+    foreach (var set in sp.Sets)
+    {
+        Console.WriteLine($"set {set.Name}: {set.Emitters.Count} emitters");
+        foreach (var e in set.Emitters)
+        {
+            var j = e.Json;
+            Console.WriteLine($"  {e.Name} type {e.Type}: start {j["start"]} dur {j["duration"]} rate {j["rate"]} int {j["interval"]} life {j["life"]} shape {j["shape"]} billboard {j["billboard"]} blend {j["blend"]} " +
+                $"tex {string.Join("/", e.Textures.Where(x => x != null).Select(x => $"{x.Width}x{x.Height} {PokeModelExporter.Ctr.PicaTexture.Name(x.Format)}"))} | tev {e.Pica.GetValueOrDefault("pica.tev")} blend {e.Pica.GetValueOrDefault("pica.blend")} depth {e.Pica.GetValueOrDefault("pica.depth")}");
+        }
+    }
+    int o = rest.IndexOf("--out");
+    if (o >= 0)
+    {
+        Directory.CreateDirectory(rest[o + 1]);
+        File.WriteAllText(Path.Combine(rest[o + 1], $"usum{index}.json"), sp.ToJson());
+        foreach (var t in sp.Textures.Values) File.WriteAllBytes(Path.Combine(rest[o + 1], t.Name + ".png"), sp.Png(t));
+    }
+    return 0;
+}
+
+if (rest[0] == "spbdtex") // spbdtex <GARC a/0/8/7> <index> --out <dir>: every emitter texture decoded as each PICA format of its size (research)
+{
+    var garc = PokeModelExporter.Ctr.Garc.Read(rest[1]);
+    var d = PokeModelExporter.Ctr.Garc.File0(garc, int.Parse(rest[2]));
+    string dir = rest[rest.IndexOf("--out") + 1];
+    Directory.CreateDirectory(dir);
+    int texBlock = BitConverter.ToInt32(d, 0x14), strings = BitConverter.ToInt32(d, 0x10);
+    int set = 0x48, n = BitConverter.ToInt32(d, set + 0x10), table = BitConverter.ToInt32(d, set + 0x14);
+    var done = new HashSet<int>();
+    for (int k = 0; k < n; k++)
+    {
+        int e = BitConverter.ToInt32(d, table + 8 * k);
+        for (int slot = 0; slot < 2; slot++)
+        {
+            int t = e + 0x40 + 0x7C * slot;
+            int w = BitConverter.ToUInt16(d, t), h = BitConverter.ToUInt16(d, t + 2), code = BitConverter.ToInt32(d, t + 0x6C), size = BitConverter.ToInt32(d, t + 0x70), off = BitConverter.ToInt32(d, t + 0x74);
+            if (w == 0 || !done.Add(off)) continue;
+            int bpp = size * 8 / (w * h);
+            foreach (int f in new[] { 0x02, 0x03, 0x04, 0x16, 0x17, 0x23, 0x24, 0x25, 0x26, 0x27, 0x28, 0x29, 0x2A, 0x2B })
+            {
+                if (PokeModelExporter.Ctr.PicaTexture.BitsPerPixel(f) != bpp) continue;
+                var rgba = PokeModelExporter.Ctr.PicaTexture.Decode(d, texBlock + off, w, h, f);
+                File.WriteAllBytes(Path.Combine(dir, $"c{code:X2}_e{k}s{slot}_{PokeModelExporter.Ctr.PicaTexture.Name(f)}.png"), Png.Encode(rgba, w, h));
+            }
+            Console.WriteLine($"emitter {k} slot {slot}: {w}x{h} code 0x{code:X2} {bpp} bpp at 0x{texBlock + off:X}");
+        }
+    }
+    return 0;
+}
+
 if (rest[0] == "sesd") // sesd <GARC a/0/8/8> <index>: an Ultra Sun/Moon battle sequence's commands with typed arguments
 {
     var garc = PokeModelExporter.Ctr.Garc.Read(rest[1]);
