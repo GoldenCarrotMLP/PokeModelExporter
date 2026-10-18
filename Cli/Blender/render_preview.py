@@ -57,7 +57,7 @@ print(f"BOUNDS min={tuple(round(c,3) for c in lo)} max={tuple(round(c,3) for c i
 world = bpy.data.worlds.new("w"); world.color = (0.35, 0.37, 0.42); scene.world = world
 sun = bpy.data.objects.new("sun", bpy.data.lights.new("sun", 'SUN')); sun.data.energy = 3
 sun.rotation_euler = (math.radians(50), 0, math.radians(30)); scene.collection.objects.link(sun)
-scene.render.engine = 'BLENDER_EEVEE'
+scene.render.engine = 'BLENDER_EEVEE_NEXT' if 'BLENDER_EEVEE_NEXT' in [e.identifier for e in bpy.types.RenderSettings.bl_rna.properties['engine'].enum_items] else 'BLENDER_EEVEE'  # renamed in Blender 4.2
 scene.render.resolution_x, scene.render.resolution_y = 1000, 700
 scene.render.film_transparent = False
 
