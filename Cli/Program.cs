@@ -70,6 +70,43 @@ if (rest[0] == "audio") // audio <bank> <EVENT_NAME>... --out <dir> [--switch IN
     return 0;
 }
 
+if (rest[0] == "ctrmodel") // ctrmodel <GARC file> <index> --out <file.glb>: an Ultra Sun/Moon (3DS) GF model pack as GLB
+{
+    var garc = PokeModelExporter.Ctr.Garc.Read(rest[1]);
+    var data = PokeModelExporter.Ctr.Garc.File0(garc, int.Parse(rest[2]));
+    if (!PokeModelExporter.Ctr.GfModelPack.IsPack(data)) { Console.Error.WriteLine("not a GF model pack"); return 1; }
+    var pack = PokeModelExporter.Ctr.GfModelPack.Read(data);
+    int o = rest.IndexOf("--out");
+    var textures = new Dictionary<string, byte[]>();
+    foreach (var t in pack.Textures)
+    {
+        Console.WriteLine($"texture {t.Name} {t.Width}x{t.Height} {PokeModelExporter.Ctr.PicaTexture.Name(t.Format)} mips {t.Mips}{(t.Rgba == null ? " (not decoded)" : "")}");
+        if (t.Rgba != null) textures[t.Name] = Png.Encode(t.Rgba, t.Width, t.Height);
+    }
+    foreach (var m in pack.Models)
+    {
+        Console.WriteLine($"model {m.Name}: {m.Bones.Count} bones, {m.Materials.Count} materials, {m.Meshes.Count} meshes");
+        foreach (var mat in m.Materials)
+            Console.WriteLine($"  material {mat.Name} ({mat.FragmentShader}): " + string.Join(", ", mat.TexCoords.Select(t =>
+                $"unit {t.Unit} {t.Texture} map {t.Mapping} scale {t.Scale} rot {t.Rotation:0.##} off {t.Translation} wrap {t.WrapU}/{t.WrapV}")));
+        var md = PokeModelExporter.Ctr.GfModelConvert.ToModel(m, out var warnings);
+        foreach (var w in warnings) Console.WriteLine("  warning: " + w);
+        foreach (var mesh in md.Meshes) Console.WriteLine($"  mesh {mesh.Name}: {mesh.Positions.Length} vertices, {mesh.SubMeshes.Sum(s => s.Indices.Length) / 3} triangles, uv sets {mesh.TexCoords.Count}{(mesh.Colors != null ? ", colours" : "")}");
+        if (o >= 0)
+        {
+            string file = pack.Models.Count == 1 ? rest[o + 1] : Path.ChangeExtension(rest[o + 1], null) + "_" + m.Name + ".glb";
+            File.WriteAllBytes(file, GlbWriter.Write(md, textures, mat =>
+            {
+                var map = MaterialMapping.Default(mat);
+                map.Unlit = true; map.DoubleSided = true; // effect stages: unlit; blending comes later from the render state
+                return map;
+            }));
+            Console.WriteLine("  -> " + file);
+        }
+    }
+    return 0;
+}
+
 string arc = SvExporter.FindArc(gameFolder);
 if (arc == null) { Console.Error.WriteLine($"No arc/data.trpfd under {gameFolder}"); return 1; }
 if (oodlePath == null) { Console.Error.WriteLine($"No oo2core_*_win64.dll in {games} (README step 5b) and no --oodle given"); return 1; }
