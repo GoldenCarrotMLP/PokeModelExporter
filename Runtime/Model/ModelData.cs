@@ -8,6 +8,8 @@ namespace PokeModelExporter.Model
     public sealed class ModelData
     {
         public string Name;
+        // Vertex colours are plain glTF COLOR_0 (3DS models: the combiner's vertex colour), not Trinity's effect data.
+        public bool StandardVertexColors;
         public List<NodeData> Nodes = new List<NodeData>();
         public List<MeshData> Meshes = new List<MeshData>();
         public List<MaterialData> Materials = new List<MaterialData>();

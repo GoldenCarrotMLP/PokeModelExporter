@@ -165,7 +165,7 @@ namespace PokeModelExporter.Export
                     if (mesh.TexCoords[t] != null) attrs.Add($"\"TEXCOORD_{t}\":{AddVec2(mesh.TexCoords[t])}");
                 // Trinity vertex colors drive shader effects (e.g. Braixen's flame), not tint; glTF would
                 // multiply COLOR_0 into the base color, so keep them under an application-specific name.
-                if (mesh.Colors != null) attrs.Add($"\"_TRINITY_COLOR\":{AddVec4(mesh.Colors)}");
+                if (mesh.Colors != null) attrs.Add($"\"{(model.StandardVertexColors ? "COLOR_0" : "_TRINITY_COLOR")}\":{AddVec4(mesh.Colors)}");
                 if (skin != null && mesh.Joints != null && mesh.Weights != null)
                 {
                     var joints = new byte[count * 8];

@@ -20,13 +20,13 @@ namespace PokeModelExporter.Ctr
         public static ModelData ToModel(GfModelPack.Model gf, GfModelPack pack, out List<string> warnings)
         {
             warnings = new List<string>();
-            var model = new ModelData { Name = gf.Name };
-            // Bones -> nodes (Euler XYZ, X applied first).
+            var model = new ModelData { Name = gf.Name, StandardVertexColors = true };
+            // Bones -> nodes (Euler angles, Z applied first, then Y, then X: as the motions, checked on Normalium Z's aura).
             var index = new Dictionary<string, int>();
             foreach (var b in gf.Bones)
             {
-                var q = Quaternion.CreateFromAxisAngle(Vector3.UnitZ, b.Rotation.Z) * Quaternion.CreateFromAxisAngle(Vector3.UnitY, b.Rotation.Y)
-                        * Quaternion.CreateFromAxisAngle(Vector3.UnitX, b.Rotation.X);
+                var q = Quaternion.CreateFromAxisAngle(Vector3.UnitX, b.Rotation.X) * Quaternion.CreateFromAxisAngle(Vector3.UnitY, b.Rotation.Y)
+                        * Quaternion.CreateFromAxisAngle(Vector3.UnitZ, b.Rotation.Z);
                 var n = new NodeData { Name = b.Name, Translation = b.Translation * Scale, Rotation = q, Scale = b.Scale, SkinIndex = model.Nodes.Count };
                 index[b.Name] = model.Nodes.Count;
                 model.Nodes.Add(n);
