@@ -27,6 +27,10 @@ namespace PokeModelExporter.Ctr
             public string Name, Shader, VertexShader, FragmentShader;
             public List<TexCoord> TexCoords = new List<TexCoord>();
             public uint[] Commands = Array.Empty<uint>(); // its PICA render state (blending, alpha / depth test...)
+            // The six combiner constant colours (RGBA bytes) and which one each combiner stage uses; then the specular 0 / 1,
+            // blend, emission, ambient and diffuse colours.
+            public byte[] Constants = new byte[24], ConstantAssignment = new byte[6], Colors = new byte[24];
+            public sbyte BumpTexture = -1;
         }
 
         public sealed class Bone { public string Name, Parent; public byte Flags; public Vector3 Scale, Rotation, Translation; }
@@ -53,6 +57,8 @@ namespace PokeModelExporter.Ctr
         public List<Model> Models = new List<Model>();
         public List<Texture> Textures = new List<Texture>();
         public List<string> VertexShaders = new List<string>(), FragmentShaders = new List<string>();
+        // Fragment shaders by name: the PICA writes configuring the six texture combiner stages (0xC0-0xFD).
+        public Dictionary<string, uint[]> FragmentShaderCommands = new Dictionary<string, uint[]>();
 
         public static bool IsPack(byte[] d) => d != null && d.Length > 24 && BitConverter.ToUInt32(d, 0) == 0x00010000;
 
@@ -75,7 +81,7 @@ namespace PokeModelExporter.Ctr
                         case 0: pack.Models.Add(ReadModel(d, at, name)); break;
                         case 1: pack.Textures.Add(ReadTexture(d, at, name)); break;
                         case 2: pack.VertexShaders.Add(name); break;
-                        case 4: pack.FragmentShaders.Add(name); break;
+                        case 4: pack.FragmentShaders.Add(name); pack.FragmentShaderCommands[name] = ReadShaderCommands(d, at); break;
                     }
                 }
             return pack;
@@ -90,6 +96,13 @@ namespace PokeModelExporter.Ctr
             if (SectionName(d, at + 8) == name) return at + 8;
             if (SectionName(d, at + 0x10) == name) return at + 0x10;
             throw new InvalidDataException(name + " section expected");
+        }
+
+        static uint[] ReadShaderCommands(byte[] d, int at)
+        {
+            int o = FirstSection(d, at, "shader");
+            int len = BitConverter.ToInt32(d, o + 8);
+            return Pica.Find(d, o + 0x10, o + 0x10 + len, 0xC0);
         }
 
         static Texture ReadTexture(byte[] d, int at, string name)
@@ -170,6 +183,13 @@ namespace PokeModelExporter.Ctr
             o += 4; mat.Shader = LString(d, ref o);
             o += 4; mat.VertexShader = LString(d, ref o);
             o += 4; mat.FragmentShader = LString(d, ref o);
+            // 3 LUT hashes, 4 bytes, bump texture, constant assignments (6), padding, constants (6 RGBA), colours (6 RGBA).
+            int c = o + 16;
+            mat.BumpTexture = (sbyte)d[c];
+            Array.Copy(d, c + 1, mat.ConstantAssignment, 0, 6);
+            Array.Copy(d, c + 8, mat.Constants, 0, 24);
+            Array.Copy(d, c + 32, mat.Colors, 0, 24);
+            mat.Commands = Pica.Find(d, o, end, 0x101);
             // Texture coordinate entries: a hash, a length-prefixed texture name (one the model lists), then the unit,
             // mapping, UV scale / rotation / translation and the sampler's wrap and filters.
             for (int p = o; p < end - 8; p++)

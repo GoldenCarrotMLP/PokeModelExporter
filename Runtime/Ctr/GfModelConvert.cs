@@ -14,7 +14,10 @@ namespace PokeModelExporter.Ctr
     {
         public const float Scale = 0.01f;
 
-        public static ModelData ToModel(GfModelPack.Model gf, out List<string> warnings)
+        public static ModelData ToModel(GfModelPack.Model gf, out List<string> warnings) => ToModel(gf, null, out warnings);
+
+        // pack: for the fragment shaders (texture combiner) the materials name.
+        public static ModelData ToModel(GfModelPack.Model gf, GfModelPack pack, out List<string> warnings)
         {
             warnings = new List<string>();
             var model = new ModelData { Name = gf.Name };
@@ -43,7 +46,9 @@ namespace PokeModelExporter.Ctr
                     md.Colors["UVTransform" + tc.Unit] = new Vector4(tc.Scale.X, tc.Scale.Y, tc.Translation.X, tc.Translation.Y);
                     md.Floats["UVRotation" + tc.Unit] = tc.Rotation;
                     md.Floats["UVMapping" + tc.Unit] = tc.Mapping;
+                    md.Floats["WrapU" + tc.Unit] = tc.WrapU; md.Floats["WrapV" + tc.Unit] = tc.WrapV; // PICA: 0 clamp, 1 border, 2 repeat, 3 mirror
                 }
+                Describe(mat, pack, md);
                 model.Materials.Add(md);
             }
 
@@ -55,6 +60,47 @@ namespace PokeModelExporter.Ctr
                 }
             return model;
         }
+
+        // The PICA state a material draws with, for an engine shader that rebuilds it (material extras):
+        //   options pica.tev        the six combiner stages: "source,operand,combine,scale" (hex) separated by ';'
+        //   options pica.tevBuffer  0xE0 (buffer inputs / update masks) and 0xFD (buffer start colour), hex
+        //   options pica.colorOp / blend / blendColor / alphaTest / depth / cull   registers 0x100, 0x101, 0x103, 0x104,
+        //                           0x107, 0x040 (hex)
+        //   colors Constant0..5     each stage's constant colour (the material's constant its assignment picks)
+        //   colors Specular0, Specular1, BlendColor, Emission, Ambient, Diffuse
+        static readonly int[] StageRegs = { 0xC0, 0xC8, 0xD0, 0xD8, 0xF0, 0xF8 };
+
+        static void Describe(GfModelPack.Material mat, GfModelPack pack, MaterialData md)
+        {
+            if (pack != null && mat.FragmentShader != null && pack.FragmentShaderCommands.TryGetValue(mat.FragmentShader, out var fs))
+            {
+                var r = Pica.Last(fs);
+                var stages = new List<string>();
+                foreach (int s in StageRegs)
+                    stages.Add($"{Reg(r, s):X},{Reg(r, s + 1):X},{Reg(r, s + 2):X},{Reg(r, s + 4):X}");
+                md.ShaderOptions["pica.tev"] = string.Join(";", stages);
+                md.ShaderOptions["pica.tevBuffer"] = $"{Reg(r, 0xE0):X},{Reg(r, 0xFD):X}";
+            }
+            var state = Pica.Last(mat.Commands);
+            md.ShaderOptions["pica.colorOp"] = Reg(state, 0x100).ToString("X");
+            md.ShaderOptions["pica.blend"] = Reg(state, 0x101).ToString("X");
+            md.ShaderOptions["pica.blendColor"] = Reg(state, 0x103).ToString("X");
+            md.ShaderOptions["pica.alphaTest"] = Reg(state, 0x104).ToString("X");
+            md.ShaderOptions["pica.depth"] = Reg(state, 0x107).ToString("X");
+            md.ShaderOptions["pica.cull"] = Reg(state, 0x040).ToString("X");
+            for (int s = 0; s < 6; s++)
+            {
+                int c = Math.Min(5, (int)mat.ConstantAssignment[s]);
+                md.Colors["Constant" + s] = Rgba(mat.Constants, c);
+            }
+            string[] names = { "Specular0", "Specular1", "BlendColor", "Emission", "Ambient", "Diffuse" };
+            for (int i = 0; i < 6; i++) md.Colors[names[i]] = Rgba(mat.Colors, i);
+            // Blending (0x100 bit 8: blend instead of logic op) makes it transparent for previews; the engine reads the rest.
+            if ((Reg(state, 0x100) & 0x100) != 0) md.AlphaType = "Transparent";
+        }
+
+        static uint Reg(Dictionary<int, uint> r, int reg) => r.TryGetValue(reg, out var v) ? v : 0;
+        static Vector4 Rgba(byte[] b, int i) => new Vector4(b[i * 4], b[i * 4 + 1], b[i * 4 + 2], b[i * 4 + 3]) / 255f;
 
         sealed class Regs
         {

@@ -89,7 +89,8 @@ if (rest[0] == "ctrmodel") // ctrmodel <GARC file> <index> --out <file.glb>: an 
         foreach (var mat in m.Materials)
             Console.WriteLine($"  material {mat.Name} ({mat.FragmentShader}): " + string.Join(", ", mat.TexCoords.Select(t =>
                 $"unit {t.Unit} {t.Texture} map {t.Mapping} scale {t.Scale} rot {t.Rotation:0.##} off {t.Translation} wrap {t.WrapU}/{t.WrapV}")));
-        var md = PokeModelExporter.Ctr.GfModelConvert.ToModel(m, out var warnings);
+        var md = PokeModelExporter.Ctr.GfModelConvert.ToModel(m, pack, out var warnings);
+        foreach (var mm in md.Materials) { var so = mm.ShaderOptions; Console.WriteLine("  " + mm.Name + ": tev " + so.GetValueOrDefault("pica.tev") + " | buffer " + so.GetValueOrDefault("pica.tevBuffer") + " | colorOp " + so["pica.colorOp"] + " blend " + so["pica.blend"] + " alpha " + so["pica.alphaTest"] + " depth " + so["pica.depth"] + " cull " + so["pica.cull"] + " const0 " + mm.Colors["Constant0"]); }
         foreach (var w in warnings) Console.WriteLine("  warning: " + w);
         foreach (var mesh in md.Meshes) Console.WriteLine($"  mesh {mesh.Name}: {mesh.Positions.Length} vertices, {mesh.SubMeshes.Sum(s => s.Indices.Length) / 3} triangles, uv sets {mesh.TexCoords.Count}{(mesh.Colors != null ? ", colours" : "")}");
         if (o >= 0)
