@@ -70,6 +70,21 @@ if (rest[0] == "audio") // audio <bank> <EVENT_NAME>... --out <dir> [--switch IN
     return 0;
 }
 
+if (rest[0] == "ctrmotion") // ctrmotion <GARC file> <index> [--out <file.json>]: an Ultra Sun/Moon (3DS) GF motion pack as JSON
+{
+    var garc = PokeModelExporter.Ctr.Garc.Read(rest[1]);
+    var data = PokeModelExporter.Ctr.Garc.File0(garc, int.Parse(rest[2]));
+    if (!PokeModelExporter.Ctr.GfMotion.IsMotion(data)) { Console.Error.WriteLine("not a GF motion pack"); return 1; }
+    var mot = PokeModelExporter.Ctr.GfMotion.Read(data);
+    Console.WriteLine($"{mot.FrameCount} frames{(mot.Loop ? ", loop" : "")}: {mot.Bones.Count} bone tracks, {mot.Uvs.Count} UV tracks, {mot.Colors.Count} colour tracks" +
+        (mot.OtherSections.Count > 0 ? ", unread sections " + string.Join(",", mot.OtherSections) : ""));
+    foreach (var u in mot.Uvs) Console.WriteLine($"  uv {u.Material} unit {u.Unit}: " + string.Join(" ", u.Channels.Select((c, i) => !c.Animated ? "-" : c.Frames == null ? c.Constant.ToString("0.###") : $"{c.Frames.Length} keys")));
+    foreach (var c in mot.Colors) Console.WriteLine($"  colour {c.Material} constant {c.Index}: " + string.Join(" ", c.Channels.Select(x => !x.Animated ? "-" : x.Frames == null ? x.Constant.ToString("0.###") : $"{x.Frames.Length} keys")));
+    int o = rest.IndexOf("--out");
+    if (o >= 0) File.WriteAllText(rest[o + 1], mot.ToJson());
+    return 0;
+}
+
 if (rest[0] == "ctrmodel") // ctrmodel <GARC file> <index> --out <file.glb>: an Ultra Sun/Moon (3DS) GF model pack as GLB
 {
     var garc = PokeModelExporter.Ctr.Garc.Read(rest[1]);

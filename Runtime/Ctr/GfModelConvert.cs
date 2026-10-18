@@ -92,6 +92,7 @@ namespace PokeModelExporter.Ctr
             {
                 int c = Math.Min(5, (int)mat.ConstantAssignment[s]);
                 md.Colors["Constant" + s] = Rgba(mat.Constants, c);
+                md.Floats["ConstAssign" + s] = c; // which of the six constants the stage uses (colour animations name these)
             }
             string[] names = { "Specular0", "Specular1", "BlendColor", "Emission", "Ambient", "Diffuse" };
             for (int i = 0; i < 6; i++) md.Colors[names[i]] = Rgba(mat.Colors, i);
