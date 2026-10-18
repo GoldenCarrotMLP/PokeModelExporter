@@ -70,6 +70,35 @@ if (rest[0] == "audio") // audio <bank> <EVENT_NAME>... --out <dir> [--switch IN
     return 0;
 }
 
+if (rest[0] == "ctrsound") // ctrsound <bcsar> <index or script id>... --out <dir>: Ultra Sun/Moon sounds rendered to WAV
+{
+    var sar = new PokeModelExporter.Ctr.CtrSoundArchive(rest[1]);
+    if (rest.Contains("--notes")) PokeModelExporter.Ctr.CtrSoundArchive.Debug = Console.WriteLine;
+    int cb = rest.IndexOf("--code"); // --code <ExeFS/code.bin>: the game's sound id tables
+    if (cb >= 0) sar.UseIdTables(File.ReadAllBytes(rest[cb + 1]));
+    int o = rest.IndexOf("--out");
+    string dir = o >= 0 ? rest[o + 1] : ".";
+    Directory.CreateDirectory(dir);
+    if (rest.Contains("--labels")) { for (int i = 0; i < sar.SoundCount; i++) Console.WriteLine($"{i} {sar.Label(i)}"); return 0; }
+    int wv = rest.IndexOf("--wave"); // --wave <warc> <index>: one wave as decoded
+    if (wv >= 0)
+    {
+        var s = sar.WaveSamples(int.Parse(rest[wv + 1], System.Globalization.NumberStyles.HexNumber), int.Parse(rest[wv + 2]), out int wr);
+        Console.WriteLine($"wave: {s?.Length} samples at {wr}: " + (s == null ? "" : string.Join(" ", s.Take(10).Select(x => x.ToString("0.000")))));
+        return 0;
+    }
+    foreach (var a in rest.Skip(2).TakeWhile(x => !x.StartsWith("--")))
+    {
+        int index = sar.IndexOf(int.Parse(a));
+        float[] pcm = null;
+        try { pcm = sar.Render(index); } catch (Exception e) { Console.WriteLine($"{a}: {e.GetType().Name} {e.Message}"); }
+        float peak = pcm == null ? 0 : pcm.Select(Math.Abs).DefaultIfEmpty(0).Max();
+        Console.WriteLine($"{a} -> sound {index} {sar.Label(index)}: {(pcm == null ? "not rendered" : $"{pcm.Length / 2 / 48000.0:0.00} s, peak {peak:0.00}")}");
+        if (pcm != null) File.WriteAllBytes(Path.Combine(dir, $"{index}_{sar.Label(index)}.wav"), PokeModelExporter.Ctr.CtrSoundArchive.Wav(pcm));
+    }
+    return 0;
+}
+
 if (rest[0] == "sesd") // sesd <GARC a/0/8/8> <index>: an Ultra Sun/Moon battle sequence's commands with typed arguments
 {
     var garc = PokeModelExporter.Ctr.Garc.Read(rest[1]);
