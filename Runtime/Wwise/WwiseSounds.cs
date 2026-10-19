@@ -110,6 +110,60 @@ namespace PokeModelExporter.Wwise
             }
             else if (obj.Type == 9 && LayerChildren(bank, obj, id) is uint[] layers)
                 foreach (uint child in layers) Collect(bank, child, wanted, result, depth + 1);
+            // Interactive music (the ME bank's jingles: the catch fanfare PLAY_ME_TI_ST_POKEGET is a Music Segment
+            // holding one Music Track): a segment plays all its tracks, a music switch / playlist container its first
+            // child, a track its sources.
+            else if (obj.Type == 11)
+            {
+                foreach (var media in TrackSources(bank, obj))
+                    if (!result.Contains(media)) result.Add(media);
+            }
+            else if ((obj.Type == 10 || obj.Type == 12 || obj.Type == 13) && MusicChildren(bank, obj, id) is uint[] kids && kids.Length > 0)
+            {
+                if (obj.Type == 10) foreach (uint child in kids) Collect(bank, child, wanted, result, depth + 1);
+                else Collect(bank, kids[0], wanted, result, depth + 1);
+            }
+        }
+
+        // A music track's sources: after the ID, a flags byte, a count, then per source { plugin, stream type, media ID,
+        // in-memory size, source bits } like a Sound's.
+        List<Media> TrackSources(Bank bank, (byte Type, int Offset, int Length) obj)
+        {
+            var found = new List<Media>();
+            var d = bank.Data;
+            int p = obj.Offset + 5, end = obj.Offset + obj.Length;
+            if (p + 4 > end) return found;
+            uint n = BitConverter.ToUInt32(d, p);
+            p += 4;
+            for (int i = 0; i < n && n <= 16 && p + 14 <= end; i++, p += 14)
+            {
+                byte stream = d[p + 4];
+                uint media = BitConverter.ToUInt32(d, p + 5);
+                var m = stream == 0 ? bank.Embedded(media) : FindStreamed(media) ?? bank.Embedded(media);
+                if (m != null && !found.Contains(m)) found.Add(m);
+            }
+            return found;
+        }
+
+        // A music container's children: the first list (count, IDs) of music objects of this bank other than itself.
+        static uint[] MusicChildren(Bank bank, (byte Type, int Offset, int Length) obj, uint self)
+        {
+            var d = bank.Data;
+            int end = obj.Offset + obj.Length;
+            for (int k = obj.Offset + 4; k + 4 <= end; k++)
+            {
+                uint n = BitConverter.ToUInt32(d, k);
+                if (n == 0 || n > 64 || k + 4 + 4L * n > end) continue;
+                var ids = new uint[n];
+                bool ok = true;
+                for (int c = 0; c < n && ok; c++)
+                {
+                    ids[c] = BitConverter.ToUInt32(d, k + 4 + 4 * c);
+                    ok = ids[c] != self && bank.Objects.TryGetValue(ids[c], out var child) && child.Type >= 10 && child.Type <= 13;
+                }
+                if (ok && ids.Distinct().Count() == ids.Length) return ids;
+            }
+            return null;
         }
 
         static readonly uint[] MotionBuses = { Hash("Motion_Bus"), Hash("Master Motion Bus"), Hash("Motion Factory Bus") };
