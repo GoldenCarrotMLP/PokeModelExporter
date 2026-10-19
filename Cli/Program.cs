@@ -879,6 +879,51 @@ switch (rest[0])
         foreach (var line in SvSceneObjects.Describe(data)) Console.WriteLine(line);
         break;
     }
+    case "tranm": // tranm <clip path in the archive>...: a skeletal clip's tracks (frames, per bone the keyed channels and their ranges)
+    {
+        foreach (var path in rest.Skip(1).Where(a => !a.StartsWith("--")))
+        {
+            var data = archive.Read(path);
+            if (data == null) { Console.Error.WriteLine("not found: " + path); return 1; }
+            var anim = TrinityAnimationReader.Read(data, Path.GetFileNameWithoutExtension(path));
+            Console.WriteLine($"{path}: {anim.FrameCount} frames @ {anim.FramesPerSecond} fps{(anim.Loop ? ", loop" : "")}");
+            string Range(float[] v) => v.Length == 0 ? "-" : $"{v.Min():0.###}..{v.Max():0.###}";
+            foreach (var t in anim.Tracks)
+            {
+                var parts = new List<string>();
+                if (t.Translation != null && t.Translation.Times.Length > 1)
+                    parts.Add($"T[{t.Translation.Times.Length}] x {Range(t.Translation.Values.Select(v => v.X).ToArray())} y {Range(t.Translation.Values.Select(v => v.Y).ToArray())} z {Range(t.Translation.Values.Select(v => v.Z).ToArray())}");
+                if (t.Rotation != null && t.Rotation.Times.Length > 1)
+                {
+                    // The turn from the first key, in degrees, to see which bone moves and how far.
+                    var q0 = t.Rotation.Values[0];
+                    float most = 0;
+                    foreach (var q in t.Rotation.Values)
+                    {
+                        float dot = Math.Abs(q.X * q0.X + q.Y * q0.Y + q.Z * q0.Z + q.W * q0.W);
+                        most = Math.Max(most, (float)(2 * Math.Acos(Math.Min(1, dot)) * 180 / Math.PI));
+                    }
+                    parts.Add($"R[{t.Rotation.Times.Length}] up to {most:0.#} deg");
+                    if (rest.Contains("--keys")) // every key: frame, angle from the first key and the turn's axis
+                        for (int i = 0; i < t.Rotation.Times.Length; i++)
+                        {
+                            var q = t.Rotation.Values[i];
+                            // q0^-1 * q
+                            var d = new System.Numerics.Quaternion(q0.W * q.X - q0.X * q.W - q0.Y * q.Z + q0.Z * q.Y, q0.W * q.Y + q0.X * q.Z - q0.Y * q.W - q0.Z * q.X,
+                                q0.W * q.Z - q0.X * q.Y + q0.Y * q.X - q0.Z * q.W, q0.W * q.W + q0.X * q.X + q0.Y * q.Y + q0.Z * q.Z);
+                            float angle = (float)(2 * Math.Acos(Math.Min(1, Math.Abs(d.W))) * 180 / Math.PI);
+                            float s = (float)Math.Sqrt(Math.Max(1e-12, 1 - d.W * d.W));
+                            parts.Add($"\n      f{t.Rotation.Times[i]:0.#} {angle:0.#} deg axis ({d.X / s:0.##}, {d.Y / s:0.##}, {d.Z / s:0.##})");
+                        }
+                }
+                if (t.Scale != null && t.Scale.Times.Length > 1)
+                    parts.Add($"S[{t.Scale.Times.Length}] {Range(t.Scale.Values.Select(v => v.X).ToArray())}");
+                if (parts.Count > 0) Console.WriteLine($"  {t.Bone,-24} {string.Join("  ", parts)}");
+            }
+        }
+        break;
+    }
+
     case "timeline": // timeline <move number | timeline path> [file suffix: attack, 1...] [--all-conditions]: a move's effect timeline (effect/battle_ew/ew<move>/ew<move>[_suffix].trtml)
     {
         string suffix = rest.Count > 2 && !rest[2].StartsWith("--") ? "_" + rest[2] : "";
@@ -960,7 +1005,9 @@ switch (rest[0])
         int svs = rest.IndexOf("--svshaders");
         if (svs >= 0) SvShaderGen.OutDir = Path.GetFullPath(rest[svs + 1]);
         Directory.CreateDirectory(outDir);
-        var only = new HashSet<int>(rest.Skip(1).Where(a => int.TryParse(a, out _)).Select(int.Parse).Where(n => n > 0 && (h < 0 || n.ToString() != rest[h + 1])));
+        // Only some effects (move numbers, or the negative keys below: -2104 = the Poke Ball's eb004): textures.json and
+        // primitives.json are then merged into the existing ones instead of rewritten from this subset.
+        var only = new HashSet<int>(rest.Skip(1).Where(a => int.TryParse(a, out _)).Select(int.Parse).Where(n => n != 0 && (h < 0 || n.ToString() != rest[h + 1])));
         var byMove = new SortedDictionary<int, List<string>>();
         foreach (var line in File.ReadLines(rest[h + 1]))
         {
@@ -969,16 +1016,22 @@ switch (rest[0])
             // The battle's system effects (stat up / down, heal, statuses, Substitute...): es001.. as -1, -2... (es<n>.json).
             // The five statuses (es001-005) keep their scene objects and particles in effect/field/status/es<n>/.
             var es = System.Text.RegularExpressions.Regex.Match(path, @"^effect/(?:battle_es|field/status)/es(\d{3})/es\d{3}(?:_0)?\.(trtml|trsot)$");
-            // Battle events the stage plays: terrains starting (ee050 Grassy, ee051 Misty, ee052 Electric, ee053 Psychic) and
+            // Battle events the stage plays: terrains starting (ee050 Grassy, ee051 Misty, ee052 Electric, ee053 Psychic),
             // entry hazards hurting a Pokemon as it comes in (ee040 Spikes, ee041 Toxic
-            // Spikes, ee042 Stealth Rock), as -1040.. (ee<n>.json).
-            var ee = System.Text.RegularExpressions.Regex.Match(path, @"^effect/battle_ee/ee(04[0-2]|05[0-3])/ee\d{3}(?:_0)?\.(trtml|trsot)$");
+            // Spikes, ee042 Stealth Rock), as -1040.. (ee<n>.json), and a thrown ball's effects (ee101: the
+            // trail behind it, the flash as it opens, the beam drawing the Pokemon in, the close; no timeline, the game's
+            // code times them) as -1101.
+            var ee = System.Text.RegularExpressions.Regex.Match(path, @"^effect/battle_ee/ee(04[0-2]|05[0-3]|101)/ee\d{3}(?:_0)?\.(trtml|trsot)$");
             // Weather on the field (etb001 rain, etb002 snow, etb003 sandstorm, etb004 sun), as -2001.. (etb<n>.json):
             // looping particles and an ambient sound, no timeline.
             var etb = System.Text.RegularExpressions.Regex.Match(path, @"^effect/battle_etb/etb(\d{3})/etb\d{3}_0\.trsot$");
-            if (!m.Success && !es.Success && !ee.Success && !etb.Success) continue;
+            // Each kind of ball's effects (eb001 Master Ball .. eb027 Strange Ball, numbered like world/data/battle/
+            // plib_ball_conversion's plibID): "ballout" when a Pokemon comes out of it, "capture" when one is drawn in;
+            // as -2101.. (eb<n>.json), no timeline either.
+            var eb = System.Text.RegularExpressions.Regex.Match(path, @"^effect/battle_eb/eb(\d{3})/eb\d{3}_0\.trsot$");
+            if (!m.Success && !es.Success && !ee.Success && !etb.Success && !eb.Success) continue;
             int move = es.Success ? -int.Parse(es.Groups[1].Value) : ee.Success ? -1000 - int.Parse(ee.Groups[1].Value)
-                : etb.Success ? -2000 - int.Parse(etb.Groups[1].Value)
+                : etb.Success ? -2000 - int.Parse(etb.Groups[1].Value) : eb.Success ? -2100 - int.Parse(eb.Groups[1].Value)
                 : int.Parse(m.Groups[1].Success ? m.Groups[1].Value : m.Groups[4].Value);
             if (only.Count > 0 && !only.Contains(move)) continue;
             if (!byMove.TryGetValue(move, out var list)) byMove[move] = list = new List<string>();
@@ -987,6 +1040,7 @@ switch (rest[0])
         // Terastallization (Docs/terastal-research.md), as -3001 (tera.json): the cinematic's timeline from demo/ with its
         // shared scene objects, every type's (ej_transform_start00..17, 99) and its camera cuts.
         const int Tera = -3001;
+        const int BallThrow = -1101; // effect/battle_ee/ee101: a thrown ball's effects, a scene without a timeline
         var teraTimeline = "demo/ej/ej_transform01/ej_transform01.trtml";
         bool wantTera = only.Count == 0 || only.Contains(Tera);
         if (wantTera) byMove[Tera] = new List<string> { teraTimeline };
@@ -1023,7 +1077,7 @@ switch (rest[0])
                 if (path.EndsWith(".trtml", StringComparison.Ordinal)) timelines[stem] = data;
                 else if (stem.EndsWith("_0", StringComparison.Ordinal)) scenes[stem.Substring(0, stem.Length - 2)] = data;
             }
-            if (timelines.Count == 0 && kv.Key > -2000) continue;
+            if (timelines.Count == 0 && kv.Key > -2000 && kv.Key != BallThrow) continue;
             if (kv.Key == Mega && megaScene != null) foreach (var stem in timelines.Keys) scenes[stem] = megaScene;
             // Later hits of multi-hit moves (ew0024_2: Double Kick's second kick) have no scene objects of their own:
             // they play the first hit's objects (73 timelines). _1.trsot files repeat the _0 ones.
@@ -1045,13 +1099,15 @@ switch (rest[0])
                     if (archive.Read($"demo/ej/ej_transform01/ej_transform01_cam_c{c:D3}.trcma") is byte[] cma)
                         cameras[$"ej_transform01_cam_c{c:D3}"] = TrinityAnimationReader.ReadCamera(cma);
             }
-            string folder = kv.Key == Mega ? "ik_demo/ee/m_shinka" : kv.Key == Tera ? "demo/ej/ej_transform01" : kv.Key <= -2000 ? $"effect/battle_etb/etb{-2000 - kv.Key:D3}"
+            string folder = kv.Key == Mega ? "ik_demo/ee/m_shinka" : kv.Key == Tera ? "demo/ej/ej_transform01"
+                : kv.Key <= -2100 ? $"effect/battle_eb/eb{-2100 - kv.Key:D3}" : kv.Key <= -2000 ? $"effect/battle_etb/etb{-2000 - kv.Key:D3}"
                 : kv.Key <= -1000 ? $"effect/battle_ee/ee{-1000 - kv.Key:D3}" : kv.Key < 0 ? $"effect/battle_es/es{-kv.Key:D3}" : null;
             string json = SvMoveFx.Export(kv.Key, timelines, scenes, archive.Read, out int count,
                 (path, name, cx, cy) => { if (!textureSources.ContainsKey(name)) textureSources[name] = (path, cx, cy); },
                 (path, name, prim) => { if (!primitiveShapes.ContainsKey(name)) { var shape = FxPrimitiveShape.Analyze(prim); shape.Source = path; primitiveShapes[name] = shape; } },
                 folder, extraScenes, cameras);
-            string file = Path.Combine(outDir, kv.Key == Mega ? "mega.json" : kv.Key == Tera ? "tera.json" : kv.Key <= -2000 ? $"etb{-2000 - kv.Key:D3}.json"
+            string file = Path.Combine(outDir, kv.Key == Mega ? "mega.json" : kv.Key == Tera ? "tera.json"
+                : kv.Key <= -2100 ? $"eb{-2100 - kv.Key:D3}.json" : kv.Key <= -2000 ? $"etb{-2000 - kv.Key:D3}.json"
                 : kv.Key <= -1000 ? $"ee{-1000 - kv.Key:D3}.json" : kv.Key < 0 ? $"es{-kv.Key:D3}.json" : $"{kv.Key:D4}.json");
             File.WriteAllText(file, json);
             total += json.Length; files++; emitters += count;
@@ -1063,7 +1119,8 @@ switch (rest[0])
         pw.BeginObject();
         foreach (var kv in primitiveShapes) { pw.Name(kv.Key); kv.Value.Write(pw); }
         pw.EndObject();
-        File.WriteAllText(Path.Combine(outDir, "primitives.json"), za ? MergeJson(Path.Combine(outDir, "primitives.json"), pw.ToString()) : pw.ToString());
+        bool merge = za || only.Count > 0; // Z-A's Mega and partial exports add to the tables instead of replacing them
+        File.WriteAllText(Path.Combine(outDir, "primitives.json"), merge ? MergeJson(Path.Combine(outDir, "primitives.json"), pw.ToString()) : pw.ToString());
         Console.WriteLine($"{primitiveShapes.Count} primitive shapes ({primitiveShapes.Count(p => p.Value.Kind == "revolution")} round) -> primitives.json");
 
         // Texture shapes (textures.json): analysed from the first particle file that has each texture.
@@ -1094,7 +1151,7 @@ switch (rest[0])
             catch (Exception e) { Console.WriteLine($"{t.Key}: {e.Message}"); }
         }
         tw.EndObject();
-        File.WriteAllText(Path.Combine(outDir, "textures.json"), za ? MergeJson(Path.Combine(outDir, "textures.json"), tw.ToString()) : tw.ToString());
+        File.WriteAllText(Path.Combine(outDir, "textures.json"), merge ? MergeJson(Path.Combine(outDir, "textures.json"), tw.ToString()) : tw.ToString());
         Console.WriteLine($"{analysed}/{textureSources.Count} texture shapes -> textures.json ({watch.ElapsedMilliseconds} ms)");
         break;
     }

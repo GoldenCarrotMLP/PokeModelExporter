@@ -136,14 +136,27 @@ namespace PokeModelExporter.Scarlet
             var tracr = read(model.Name + ".tracr") ?? read(model.Name + "_base.tracr");
             var clips = tracr != null ? TrinityAnimationReader.ClipNamesFromResource(tracr) : new List<string>();
             if (clips.Count == 0 && read(model.Name + ".tranm") != null) clips.Add(model.Name + ".tranm");
+            // Objects (chara/model_ob/ob0204_monsterball: the Poke Balls) keep their clips in the matching
+            // chara/motion_ob/ folder (ob0204_00_00930_onceaction01_c.tranm: the ball opening).
+            Func<string, byte[]> readClip = read;
+            if (clips.Count == 0 && folder.Contains("/model_ob/"))
+            {
+                string motion = folder.Replace("/model_ob/", "/motion_ob/");
+                var motionTracr = readArchive(motion + model.Name + ".tracr");
+                if (motionTracr != null)
+                {
+                    clips = TrinityAnimationReader.ClipNamesFromResource(motionTracr);
+                    readClip = f => readArchive(motion + f);
+                }
+            }
             foreach (var clipFile in clips)
             {
-                var data = read(clipFile);
+                var data = readClip(clipFile);
                 if (data == null) continue;
                 string stem = Path.GetFileNameWithoutExtension(clipFile);
                 string clip = stem == model.Name ? "default" : stem.StartsWith(model.Name + "_", StringComparison.Ordinal) ? stem.Substring(model.Name.Length + 1) : stem;
                 var anim = TrinityAnimationReader.Read(data, clip);
-                var tracm = read(Path.ChangeExtension(clipFile, ".tracm"));
+                var tracm = readClip(Path.ChangeExtension(clipFile, ".tracm"));
                 if (tracm != null) TrinityCurveReader.Read(tracm, anim);
                 model.Animations.Add(anim);
             }
