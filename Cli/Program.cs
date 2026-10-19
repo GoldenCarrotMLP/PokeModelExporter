@@ -1016,12 +1016,13 @@ switch (rest[0])
             // The battle's system effects (stat up / down, heal, statuses, Substitute...): es001.. as -1, -2... (es<n>.json).
             // The five statuses (es001-005) keep their scene objects and particles in effect/field/status/es<n>/.
             var es = System.Text.RegularExpressions.Regex.Match(path, @"^effect/(?:battle_es|field/status)/es(\d{3})/es\d{3}(?:_0)?\.(trtml|trsot)$");
-            // Battle events the stage plays: terrains starting (ee050 Grassy, ee051 Misty, ee052 Electric, ee053 Psychic),
+            // Battle events the stage plays: items (ee004 one used by the trainer, ee005 a held one taking effect, ee006 a
+            // berry eaten), terrains starting (ee050 Grassy, ee051 Misty, ee052 Electric, ee053 Psychic),
             // entry hazards hurting a Pokemon as it comes in (ee040 Spikes, ee041 Toxic
             // Spikes, ee042 Stealth Rock), as -1040.. (ee<n>.json), and a thrown ball's effects (ee101: the
             // trail behind it, the flash as it opens, the beam drawing the Pokemon in, the close; no timeline, the game's
             // code times them) as -1101.
-            var ee = System.Text.RegularExpressions.Regex.Match(path, @"^effect/battle_ee/ee(04[0-2]|05[0-3]|101)/ee\d{3}(?:_0)?\.(trtml|trsot)$");
+            var ee = System.Text.RegularExpressions.Regex.Match(path, @"^effect/battle_ee/ee(00[4-6]|04[0-2]|05[0-3]|101)/ee\d{3}(?:_0)?\.(trtml|trsot)$");
             // Weather on the field (etb001 rain, etb002 snow, etb003 sandstorm, etb004 sun), as -2001.. (etb<n>.json):
             // looping particles and an ambient sound, no timeline.
             var etb = System.Text.RegularExpressions.Regex.Match(path, @"^effect/battle_etb/etb(\d{3})/etb\d{3}_0\.trsot$");

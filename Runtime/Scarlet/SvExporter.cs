@@ -155,7 +155,11 @@ namespace PokeModelExporter.Scarlet
                 if (data == null) continue;
                 string stem = Path.GetFileNameWithoutExtension(clipFile);
                 string clip = stem == model.Name ? "default" : stem.StartsWith(model.Name + "_", StringComparison.Ordinal) ? stem.Substring(model.Name.Length + 1) : stem;
-                var anim = TrinityAnimationReader.Read(data, clip);
+                AnimationData anim;
+                // A clip that doesn't parse (the berry of effect/battle_ee/ee006, ee006_nat.tranm, has no tracks) leaves
+                // the model still.
+                try { anim = TrinityAnimationReader.Read(data, clip); }
+                catch (Exception) { continue; }
                 var tracm = readClip(Path.ChangeExtension(clipFile, ".tracm"));
                 if (tracm != null) TrinityCurveReader.Read(tracm, anim);
                 model.Animations.Add(anim);
