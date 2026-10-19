@@ -58,7 +58,7 @@ namespace PokeModelExporter.Scarlet
             var c = new SvAnimController();
             // Each file on its own: an unexpected layout (another game's version) loses that part, not the rest.
             var tracs = read(modelName + "_base.tracs");
-            if (tracs != null) try { c.ReadStates(tracs); } catch (Exception) { c.Faces.Clear(); c.ClipFlags.Clear(); }
+            if (tracs != null) try { c.ReadStates(tracs); } catch (Exception) { c.Faces.Clear(); c.ClipFlags.Clear(); c.Chains.Clear(); c.Body = null; }
             var tralk = read(modelName + "_base.tralk");
             if (tralk != null) try { c.ReadLookAt(tralk); } catch (Exception) { c.LookAt = null; }
             return c;
@@ -66,16 +66,21 @@ namespace PokeModelExporter.Scarlet
 
         // ---- tracs ----
 
-        sealed class Transition
+        // A transition out of a state (PokeDocs tracs.fbs Transition: path 0, has_exit_time 1, exit_time 2, duration 3,
+        // offset 4, can_interrupt 5, conditions 6, type 7).
+        public sealed class Transition
         {
             public string Path;
+            public bool HasExitTime, CanInterrupt;
             public float ExitTime, Duration, Offset;
+            public uint Type;
             public readonly List<(string name, uint func, double value)> Conditions = new List<(string, uint, double)>();
         }
 
-        sealed class State
+        // A state of a machine: a clip played at Speed (0 = held), its transitions and flags; Children for sub-machines.
+        public sealed class State
         {
-            public string Path, Clip;
+            public string Path, Clip, Tag;
             public uint Type; // 0 normal, 1 entry, 2 exit, 3 any, 4 top
             public float Speed;
             public readonly List<string> Flags = new List<string>();
@@ -85,9 +90,48 @@ namespace PokeModelExporter.Scarlet
             public IEnumerable<State> All() { yield return this; foreach (var c in Children) foreach (var s in c.All()) yield return s; }
         }
 
+        // The body's machine ("Base", the first), whole: how the game chains the clips (start -> loop -> end...).
+        public State Body;
+
+        // A clip chain the body machine plays as one thing: a start clip into a held loop (or a middle clip), and the
+        // clip out of it when the state ends (sleep01: 00280_sleep01_start -> 00281_sleep01_loop -> 00282_sleep01_end;
+        // down01, stun01, eat01/02, rest01, rangeattack02, stepout01, jumpdown01 -> land02; jumpup01 has no end).
+        public sealed class Chain
+        {
+            public string Name, Start, Loop, End;
+            public float BlendOut; // the blend into End (seconds, the game's 0.2)
+        }
+        public readonly List<Chain> Chains = new List<Chain>();
+
+        void BuildChains(State root)
+        {
+            var byPath = new Dictionary<string, State>();
+            foreach (var s in root.All()) if (!byPath.ContainsKey(s.Path)) byPath[s.Path] = s;
+            State Target(Transition t) => byPath.TryGetValue(t.Path, out var st) && st.Clip != null ? st : null;
+            foreach (var s in root.All())
+            {
+                if (s.Clip == null || !s.Clip.EndsWith("_start")) continue;
+                var next = s.Transitions.Select(Target).FirstOrDefault(x => x != null && x.Clip != s.Clip);
+                if (next == null) continue;
+                string name = Numbered.Replace(next.Clip, "");
+                if (name.EndsWith("_loop")) name = name.Substring(0, name.Length - 5);
+                if (Chains.Any(c => c.Name == name)) continue;
+                var chain = new Chain { Name = name, Start = s.Clip, Loop = next.Clip };
+                foreach (var t in next.Transitions)
+                {
+                    var end = Target(t);
+                    if (end == null || end.Clip == next.Clip || end.Clip == s.Clip) continue;
+                    chain.End = end.Clip;
+                    chain.BlendOut = t.Duration;
+                    break;
+                }
+                Chains.Add(chain);
+            }
+        }
+
         static State ReadState(FbTable t)
         {
-            var s = new State { Path = t.String(0) ?? "", Type = t.U32(1) };
+            var s = new State { Path = t.String(0) ?? "", Type = t.U32(1), Tag = t.String(2) };
             var source = t.Table(3);
             if (!source.IsNull)
             {
@@ -99,7 +143,11 @@ namespace PokeModelExporter.Scarlet
             for (int i = 0; !transitions.IsNull && i < transitions.Length; i++)
             {
                 var tt = transitions.Table(i);
-                var tr = new Transition { Path = tt.String(0) ?? "", ExitTime = tt.F32(2, 1), Duration = tt.F32(3), Offset = tt.F32(4) };
+                var tr = new Transition
+                {
+                    Path = tt.String(0) ?? "", HasExitTime = tt.I8(1) != 0, ExitTime = tt.F32(2, 1), Duration = tt.F32(3), Offset = tt.F32(4),
+                    CanInterrupt = tt.I8(5) != 0, Type = tt.U32(7),
+                };
                 var conditions = tt.Vector(6);
                 for (int k = 0; !conditions.IsNull && k < conditions.Length; k++)
                 {
@@ -128,6 +176,8 @@ namespace PokeModelExporter.Scarlet
                 var root = ReadState(top.Table(1));
                 if (i == 0 || name == "Base")
                 {
+                    Body = root;
+                    BuildChains(root);
                     foreach (var s in root.All())
                     {
                         if (string.IsNullOrEmpty(s.Clip)) continue;

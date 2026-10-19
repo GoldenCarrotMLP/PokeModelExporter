@@ -330,6 +330,35 @@ switch (rest[0])
         break;
     }
 
+    case "states": // states <dex> [form] [gender]: the body's state machine (how the game chains the clips)
+    {
+        var entry = FindEntry(SvCatalog.Open(archive.Read), archive, rest);
+        if (entry == null) { Console.Error.WriteLine("no model"); return 1; }
+        string folder = entry.DataRoot + entry.Folder;
+        string modelName = Path.GetFileNameWithoutExtension(entry.ModelPath);
+        var controller = SvAnimController.Read(modelName, file => archive.Read(folder + file));
+        if (controller.Body == null) { Console.Error.WriteLine("no body machine"); return 1; }
+        static string Kind(uint type) => type switch { 1 => "entry", 2 => "exit", 3 => "any", 4 => "top", _ => "" };
+        static string Func(uint f) => f switch { 0 => "", 1 => ">", 2 => "<", 3 => "!=", 4 => "==", 5 => ">=", 6 => "<=", _ => "f" + f };
+        void Print(SvAnimController.State s, int depth)
+        {
+            string pad = new string(' ', depth * 2);
+            string head = s.Clip != null ? $"{s.Leaf}  clip {s.Clip} x{s.Speed:0.##}" : $"{s.Leaf} {Kind(s.Type)}";
+            if (s.Flags.Count > 0) head += "  [" + string.Join(" ", s.Flags) + "]";
+            if (!string.IsNullOrEmpty(s.Tag)) head += "  tag " + s.Tag;
+            Console.WriteLine(pad + head);
+            foreach (var t in s.Transitions)
+            {
+                string conds = string.Join(" & ", t.Conditions.Select(c => c.func == 0 && c.value == 0 ? c.name : $"{c.name} {Func(c.func)} {c.value}"));
+                string target = t.Path.StartsWith(s.Path.Substring(0, Math.Max(0, s.Path.LastIndexOf('/') + 1))) ? t.Path.Substring(s.Path.LastIndexOf('/') + 1) : t.Path;
+                Console.WriteLine($"{pad}  -> {target}{(t.HasExitTime ? $" at {t.ExitTime:0.##}" : "")} blend {t.Duration:0.##}{(t.Offset != 0 ? $" offset {t.Offset:0.##}" : "")}{(t.CanInterrupt ? " interruptible" : "")}{(conds.Length > 0 ? " when " + conds : "")}{(t.Type != 0 ? " type " + t.Type : "")}");
+            }
+            foreach (var c in s.Children) Print(c, depth + 1);
+        }
+        Print(controller.Body, 0);
+        break;
+    }
+
     case "extract": // extract <path> <output file>
     {
         var data = archive.Read(rest[1]);

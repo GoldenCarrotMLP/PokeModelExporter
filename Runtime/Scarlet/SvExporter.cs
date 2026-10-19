@@ -438,6 +438,20 @@ namespace PokeModelExporter.Scarlet
                     w.EndArray().EndObject();
                 }
             }
+            // The body machine's clip chains (start -> loop -> end), only those whose clips were exported.
+            if (controller != null && controller.Chains.Count > 0)
+            {
+                var exported = new HashSet<string>(model.Animations.Select(a => a.Name));
+                w.Name("chains").BeginObject();
+                foreach (var c in controller.Chains)
+                {
+                    if (!exported.Contains(c.Start) || !exported.Contains(c.Loop)) continue;
+                    w.Name(c.Name).BeginObject().Name("start").Value(c.Start).Name("loop").Value(c.Loop);
+                    if (c.End != null && exported.Contains(c.End)) w.Name("end").Value(c.End).Name("blendOut").Value(c.BlendOut);
+                    w.EndObject();
+                }
+                w.EndObject();
+            }
             w.Name("species").Value(entry.Species).Name("form").Value(entry.Form).Name("gender").Value(entry.Gender);
             w.Name("shiny").Value(shiny);
             w.Name("size").Value(config?.SizeName ?? "M");
