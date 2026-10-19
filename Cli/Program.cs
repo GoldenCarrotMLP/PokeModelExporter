@@ -304,6 +304,27 @@ switch (rest[0])
         break;
     }
 
+    case "facial": // facial <dex> [form] [gender]: the animation controller's face layers, look-at and state flags
+    {
+        var entry = FindEntry(SvCatalog.Open(archive.Read), archive, rest);
+        if (entry == null) { Console.Error.WriteLine("no model"); return 1; }
+        string folder = entry.DataRoot + entry.Folder;
+        string modelName = Path.GetFileNameWithoutExtension(entry.ModelPath);
+        var controller = SvAnimController.Read(modelName, file => archive.Read(folder + file));
+        Console.WriteLine($"{modelName}: {controller.Faces.Count} face layers, {controller.ClipFlags.Count} body clips with states");
+        foreach (var face in controller.Faces)
+        {
+            Console.WriteLine($"  {face.Name}: clip {face.Clip}, parameter {face.Parameter ?? "-"}, trigger {face.Trigger ?? "-"}");
+            foreach (var p in face.Poses) Console.WriteLine($"    {face.Parameter} = {p.Value}: {p.Name} at t {p.Time:0.###}");
+            if (face.Blink.Count > 0) Console.WriteLine("    blink: " + string.Join(" -> ", face.Blink.Select(b => $"{b.From:0.##}..{b.To:0.##} x{b.Speed:0.#}")));
+        }
+        if (controller.LookAt is SvAnimController.LookAtInfo look)
+            Console.WriteLine($"  look-at: bone {look.Bone}, max {look.MaxAngle} deg, speed {look.Speed}, weight {look.Weight}, eye UV {look.EyeUv}");
+        foreach (var kv in controller.ClipFlags.OrderBy(k => k.Key, StringComparer.Ordinal))
+            Console.WriteLine($"  {kv.Key,-36} {string.Join(" ", kv.Value)}");
+        break;
+    }
+
     case "extract": // extract <path> <output file>
     {
         var data = archive.Read(rest[1]);

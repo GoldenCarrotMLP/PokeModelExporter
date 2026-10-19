@@ -54,6 +54,7 @@ namespace PokeModelExporter.Scarlet
             public SvConfig Config;
             public byte[] Glb;
             public string ActorManifest;    // JSON, see ActorManifest
+            public SvAnimController Controller; // the face layers, state flags and look-at (null when the files are missing)
             public Func<string, byte[]> Read; // read a file of the model folder
         }
 
@@ -83,7 +84,11 @@ namespace PokeModelExporter.Scarlet
             Func<string, byte[]> read = file => Archive.Read(folder + file);
 
             var model = TrinityModelReader.Read(entry.ModelPath.Substring(entry.Folder.Length), read, shiny: options.Shiny, locatorFiles: entry.LocatorFiles());
-            if (options.Animations) LoadClips(model, read, options.Clips, options.MainClipSetOnly);
+            SvAnimController controller = null;
+            try { controller = SvAnimController.Read(model.Name, read); }
+            catch (Exception) { controller = null; } // an unexpected controller layout: the model still exports
+            // The face clips (eye01, mouth01) always come along: the face layer plays them over any body clip.
+            if (options.Animations) LoadClips(model, read, options.Clips, options.MainClipSetOnly, controller?.Faces.Select(f => f.Clip));
             if (options.Animations && options.MainClipSetOnly && model.Animations.Count > 0) KeepLocatorSet(model, model.Animations[0].Name[0]);
             ScaleCompensation.Apply(model); // after the node list is final (locators are expected last before this)
 
@@ -117,7 +122,8 @@ namespace PokeModelExporter.Scarlet
                 Model = model,
                 Config = config,
                 Glb = GlbWriter.Write(model, baked.Textures, m => baked.Mappings[m.Name], extra),
-                ActorManifest = ActorManifest.Write(model, entry, config, options.Shiny),
+                ActorManifest = ActorManifest.Write(model, entry, config, options.Shiny, controller),
+                Controller = controller,
                 Read = read,
             };
         }
@@ -249,18 +255,21 @@ namespace PokeModelExporter.Scarlet
 
         // Every skeletal clip listed in the model's animation resource file, with its notifies (.traef) and
         // material/visibility/blend-shape tracks (.tracm). Meshes the battle idle hides are hidden by default.
-        public static void LoadClips(ModelData model, Func<string, byte[]> read, Func<string, bool> filter = null, bool mainSetOnly = false)
+        // always: clips kept whatever the set and filter say (the controller's face clips).
+        public static void LoadClips(ModelData model, Func<string, byte[]> read, Func<string, bool> filter = null, bool mainSetOnly = false, IEnumerable<string> always = null)
         {
             var tracr = read(model.Name + "_base.tracr");
             if (tracr == null) return;
             var files = TrinityAnimationReader.ClipNamesFromResource(tracr);
             string ClipName(string file) => Path.GetFileNameWithoutExtension(file).Substring(model.Name.Length + 1); // 00001_battlewait01_loop
             char? set = mainSetOnly ? MainClipSet(files.Select(ClipName)) : null;
+            var forced = new HashSet<string>(always ?? Enumerable.Empty<string>());
             foreach (var file in files)
             {
                 string clip = ClipName(file);
-                if (set != null && clip[0] != set) continue;
-                if (filter != null && !filter(clip)) continue;
+                bool force = forced.Contains(clip);
+                if (!force && set != null && clip[0] != set) continue;
+                if (!force && filter != null && !filter(clip)) continue;
                 var data = read(file);
                 if (data == null) continue;
                 var anim = TrinityAnimationReader.Read(data, clip);
@@ -384,11 +393,33 @@ namespace PokeModelExporter.Scarlet
     // Times in seconds.
     public static class ActorManifest
     {
-        public static string Write(ModelData model, SvCatalog.Entry entry, SvConfig config, bool shiny)
+        public static string Write(ModelData model, SvCatalog.Entry entry, SvConfig config, bool shiny, SvAnimController controller = null)
         {
             var w = new JsonWriter();
             w.BeginObject();
             w.Name("version").Value(1);
+            // The animation controller's face layers and look-at (SvAnimController): poses as normalized times of the
+            // face clip, held; blink segments; the look-at's bone and limits.
+            if (controller != null)
+            {
+                w.Name("face").BeginObject();
+                foreach (var f in controller.Faces)
+                {
+                    w.Name(f.Name).BeginObject().Name("clip").Value(f.Clip);
+                    if (f.Parameter != null) w.Name("parameter").Value(f.Parameter);
+                    if (f.Trigger != null) w.Name("trigger").Value(f.Trigger);
+                    w.Name("poses").BeginArray();
+                    foreach (var p in f.Poses) w.BeginObject().Name("name").Value(p.Name).Name("value").Value(p.Value).Name("time").Value(p.Time).EndObject();
+                    w.EndArray();
+                    w.Name("blink").BeginArray();
+                    foreach (var b in f.Blink) w.BeginObject().Name("from").Value(b.From).Name("to").Value(b.To).Name("speed").Value(b.Speed).EndObject();
+                    w.EndArray().EndObject();
+                }
+                w.EndObject();
+                if (controller.LookAt is SvAnimController.LookAtInfo look)
+                    w.Name("lookAt").BeginObject().Name("bone").Value(look.Bone).Name("maxAngle").Value(look.MaxAngle)
+                        .Name("speed").Value(look.Speed).Name("weight").Value(look.Weight).Name("eyeUv").Value(look.EyeUv).EndObject();
+            }
             w.Name("species").Value(entry.Species).Name("form").Value(entry.Form).Name("gender").Value(entry.Gender);
             w.Name("shiny").Value(shiny);
             w.Name("size").Value(config?.SizeName ?? "M");
@@ -405,6 +436,12 @@ namespace PokeModelExporter.Scarlet
                 w.Name(a.Name).BeginObject();
                 w.Name("duration").Value(a.Duration).Name("loop").Value(a.Loop);
                 if (a.RootSpeed > 0) w.Name("rootSpeed").Value(a.RootSpeed);
+                if (controller != null && controller.ClipFlags.TryGetValue(a.Name, out var flags) && flags.Count > 0)
+                {
+                    w.Name("flags").BeginArray();
+                    foreach (var f in flags) w.Value(f);
+                    w.EndArray();
+                }
                 w.Name("events").BeginArray();
                 foreach (var e in a.Events)
                 {
