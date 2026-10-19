@@ -319,7 +319,12 @@ switch (rest[0])
             if (face.Blink.Count > 0) Console.WriteLine("    blink: " + string.Join(" -> ", face.Blink.Select(b => $"{b.From:0.##}..{b.To:0.##} x{b.Speed:0.#}")));
         }
         if (controller.LookAt is SvAnimController.LookAtInfo look)
-            Console.WriteLine($"  look-at: bone {look.Bone}, max {look.MaxAngle} deg, speed {look.Speed}, weight {look.Weight}, eye UV {look.EyeUv}");
+        {
+            Console.WriteLine($"  look-at: fade angle {look.MaxAngle} deg, {look.Bones.Count} bones, {look.Eyes.Count} eyes");
+            foreach (var b in look.Bones) Console.WriteLine($"    bone {b.Name,-10} yaw {b.YawLeft}/{b.YawRight} pitch {b.Up}/{b.Down} smooth {b.Smooth}");
+            foreach (var e in look.Eyes)
+                Console.WriteLine($"    eye {e.Material,-8} on {e.Bone} mesh {e.Mesh} yaw {e.YawLeft}/{e.YawRight} pitch {e.Up}/{e.Down} smooth {e.Smooth} offset ({string.Join(", ", e.Offset.Select(v => v.ToString("0.###")))}) uv left ({e.Map[0]:0.###}, {e.Map[1]:0.###}) up ({e.Map[3]:0.###}, {e.Map[4]:0.###}) right ({e.Map[6]:0.###}, {e.Map[7]:0.###}) tracks {string.Join(" ", e.Tracks)}");
+        }
         foreach (var kv in controller.ClipFlags.OrderBy(k => k.Key, StringComparer.Ordinal))
             Console.WriteLine($"  {kv.Key,-36} {string.Join(" ", kv.Value)}");
         break;

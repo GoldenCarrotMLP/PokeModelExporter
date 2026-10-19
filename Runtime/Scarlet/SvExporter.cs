@@ -417,8 +417,26 @@ namespace PokeModelExporter.Scarlet
                 }
                 w.EndObject();
                 if (controller.LookAt is SvAnimController.LookAtInfo look)
+                {
                     w.Name("lookAt").BeginObject().Name("bone").Value(look.Bone).Name("maxAngle").Value(look.MaxAngle)
-                        .Name("speed").Value(look.Speed).Name("weight").Value(look.Weight).Name("eyeUv").Value(look.EyeUv).EndObject();
+                        .Name("speed").Value(look.Speed).Name("weight").Value(look.Weight).Name("eyeUv").Value(look.EyeUv);
+                    w.Name("bones").BeginArray();
+                    foreach (var b in look.Bones)
+                        w.BeginObject().Name("name").Value(b.Name).Name("yawLeft").Value(b.YawLeft).Name("yawRight").Value(b.YawRight)
+                            .Name("up").Value(b.Up).Name("down").Value(b.Down).Name("smooth").Value(b.Smooth).EndObject();
+                    w.EndArray();
+                    w.Name("eyes").BeginArray();
+                    foreach (var e in look.Eyes)
+                    {
+                        w.BeginObject().Name("bone").Value(e.Bone).Name("mesh").Value(e.Mesh).Name("material").Value(e.Material)
+                            .Name("yawLeft").Value(e.YawLeft).Name("yawRight").Value(e.YawRight).Name("up").Value(e.Up).Name("down").Value(e.Down).Name("smooth").Value(e.Smooth);
+                        w.Name("offset").BeginArray(); foreach (var v in e.Offset) w.Value(v); w.EndArray();
+                        w.Name("map").BeginArray(); foreach (var v in e.Map) w.Value(v); w.EndArray();
+                        w.Name("tracks").BeginArray(); foreach (var t in e.Tracks) w.Value(t); w.EndArray();
+                        w.EndObject();
+                    }
+                    w.EndArray().EndObject();
+                }
             }
             w.Name("species").Value(entry.Species).Name("form").Value(entry.Form).Name("gender").Value(entry.Gender);
             w.Name("shiny").Value(shiny);

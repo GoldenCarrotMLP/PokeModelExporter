@@ -26,7 +26,27 @@ namespace PokeModelExporter.Scarlet
             public readonly List<FacePose> Poses = new List<FacePose>();
             public readonly List<FaceSegment> Blink = new List<FaceSegment>();
         }
-        public sealed class LookAtInfo { public string Bone; public float MaxAngle, Speed, Weight; public bool EyeUv; }
+        // A bone of the look-at chain (root first: Charizard neck_01, neck_02, neck_03, head) with its own limits, degrees:
+        // yaw toward the model's left (YawLeft) and right, pitch up and down, and the smoothing time (0.3 s).
+        public sealed class LookAtBone { public string Name; public float YawLeft, YawRight, Up, Down, Smooth = 0.3f; }
+        // An eye: the game slides its material's UVScaleOffset (the pupil) by the look the head didn't make. Limits per eye
+        // (the inward one smaller), the eye's position on the bone, and Map: three UV displacements (u, v, 0) reached at
+        // the left limit, the up limit and the right limit.
+        public sealed class LookAtEye
+        {
+            public string Bone, Mesh, Material;
+            public float YawLeft, YawRight, Up, Down, Smooth = 0.05f;
+            public float[] Offset = new float[3], Map = new float[9];
+            public List<string> Tracks = new List<string>();
+        }
+        public sealed class LookAtInfo
+        {
+            public string Bone;                  // the chain's root bone (Bones[0])
+            public float MaxAngle, Speed, Weight; // the file's fade angle (45; 0 in some files), the first bone's smoothing
+            public bool EyeUv;
+            public readonly List<LookAtBone> Bones = new List<LookAtBone>();
+            public readonly List<LookAtEye> Eyes = new List<LookAtEye>();
+        }
 
         public readonly List<FaceLayer> Faces = new List<FaceLayer>();
         // Body clip (00550_glad01) -> the flags of the states that play it (blink_disable, lookat_disable, priority_pass...).
@@ -190,53 +210,100 @@ namespace PokeModelExporter.Scarlet
 
         // Scarlet/Violet's layout (PokeDocs tralk.fbs). Legends Z-A's differs past the channel name: whatever doesn't
         // read keeps its default, so a bone name alone is still a look-at.
+        // Scarlet/Violet (PokeDocs tralk.fbs, with its unk_13 / unk_14 being the eye mesh and material strings and unk_17
+        // the UV table): root field 1 = channels; a channel: 0 name, 4..7 limits, 10 smoothing, 13 mesh, 14 material,
+        // 15 the eye's offset (vec3), 17 the 3x3 UV table, 20 the fade angle, 21 track names. A channel with a material
+        // is an eye, the others are the chain's bones in root-first order.
+        // Legends Z-A: root field 4 = channels; a channel: 0 bone, 1 = 1 for an eye, 2/3 smoothing, 8..13 six limits
+        // (yaw left/right, pitch up/down, and a third pair), 16 mesh, 17 material, 19 track names, 22 the UV table.
+        // Mega Lucario's eye table equals SV Lucario's, so the two files describe the same thing.
         void ReadLookAt(byte[] data)
         {
             var look = new LookAtInfo { Speed = 15, Weight = 1, MaxAngle = 45 };
-            try
+            bool read = false;
+            try { read = ReadLookAtSv(FbTable.Root(data), look); } catch (Exception) { read = false; }
+            if (!read)
             {
-                var root = FbTable.Root(data);
-                var channels = root.Vector(1);
-                if (channels.IsNull || channels.Length == 0) return;
-                var c = channels.Table(0);
-                look.Bone = c.String(0);
-                look.Speed = c.F32(4, 15);
-                look.Weight = c.F32(10, 1);
-                look.MaxAngle = c.F32(20, 45);
-                var tracks = c.Vector(21);
-                for (int i = 0; !tracks.IsNull && i < tracks.Length; i++)
-                    if ((tracks.String(i) ?? "").Contains("UVScaleOffset")) look.EyeUv = true;
+                look = new LookAtInfo { Speed = 15, Weight = 1, MaxAngle = 45 };
+                try { read = ReadLookAtZa(FbTable.Root(data), look); } catch (Exception) { read = false; }
             }
-            catch (Exception)
-            {
-                // Legends Z-A's file is laid out differently (per-eye entries with the eye mesh and material; not decoded):
-                // the bone and the eye UV come from its strings, the limits stay the defaults.
-                var strings = Strings(data);
-                look.Bone = strings.FirstOrDefault(s => s == "head" || s == "neck") ?? strings.FirstOrDefault(s => s.EndsWith("head"));
-                look.EyeUv = strings.Any(s => s.Contains("UVScaleOffset"));
-                look.Speed = 15; look.Weight = 1; look.MaxAngle = 45;
-            }
-            if (string.IsNullOrEmpty(look.Bone)) return;
-            // Bulbasaur's file says 0.45 where every other says 45: a slip in the data, read as the usual angle.
+            if (!read || look.Bones.Count == 0) return;
+            look.Bone = look.Bones[0].Name;
+            look.Speed = look.Bones[0].Smooth;
+            look.EyeUv = look.Eyes.Count > 0;
+            // Bulbasaur's file says 0.45 where every other says 45; Snorlax's and Lucario's say 0: the usual angle.
             if (look.MaxAngle <= 1 || look.MaxAngle > 180) look.MaxAngle = 45;
             LookAt = look;
         }
 
-        static List<string> Strings(byte[] data)
+        static float[] Floats(FbVector v, int count)
+        {
+            var r = new float[count];
+            for (int i = 0; !v.IsNull && i < count && i < v.Length; i++) r[i] = v.F32(i);
+            return r;
+        }
+
+        static float[] Vec3At(FbTable t, int field)
+        {
+            int p = t.InlineStruct(field);
+            return p == 0 ? new float[3] : new[] { BitConverter.ToSingle(t.Buffer, p), BitConverter.ToSingle(t.Buffer, p + 4), BitConverter.ToSingle(t.Buffer, p + 8) };
+        }
+
+        static List<string> StringsOf(FbVector v)
         {
             var list = new List<string>();
-            int start = -1;
-            for (int i = 0; i <= data.Length; i++)
-            {
-                bool printable = i < data.Length && data[i] >= 0x20 && data[i] < 0x7f;
-                if (printable) { if (start < 0) start = i; }
-                else if (start >= 0)
-                {
-                    if (i - start >= 3) list.Add(System.Text.Encoding.ASCII.GetString(data, start, i - start));
-                    start = -1;
-                }
-            }
+            for (int i = 0; !v.IsNull && i < v.Length; i++) if (v.String(i) is string s && s.Length > 0) list.Add(s);
             return list;
+        }
+
+        bool ReadLookAtSv(FbTable root, LookAtInfo look)
+        {
+            var channels = root.Vector(1);
+            if (channels.IsNull || channels.Length == 0) return false;
+            for (int i = 0; i < channels.Length; i++)
+            {
+                var c = channels.Table(i);
+                string name = c.String(0);
+                if (string.IsNullOrEmpty(name)) return false;
+                string material = c.Has(14) ? c.String(14) : null;
+                float a = c.F32(4), b = c.F32(5), up = c.F32(6), down = c.F32(7), smooth = c.F32(10, 0.3f);
+                if (a < 0 || a > 180 || b < 0 || b > 180) return false;
+                if (i == 0) look.MaxAngle = c.F32(20, 45);
+                if (string.IsNullOrEmpty(material))
+                    look.Bones.Add(new LookAtBone { Name = name, YawLeft = a, YawRight = b, Up = up, Down = down, Smooth = smooth });
+                else
+                    look.Eyes.Add(new LookAtEye
+                    {
+                        Bone = name, Mesh = c.String(13), Material = material, YawLeft = a, YawRight = b, Up = up, Down = down, Smooth = smooth,
+                        Offset = Vec3At(c, 15), Map = Floats(c.Vector(17), 9), Tracks = StringsOf(c.Vector(21)),
+                    });
+            }
+            return look.Bones.Count > 0;
+        }
+
+        bool ReadLookAtZa(FbTable root, LookAtInfo look)
+        {
+            var channels = root.Vector(4);
+            if (channels.IsNull || channels.Length == 0) return false;
+            look.MaxAngle = 45;
+            for (int i = 0; i < channels.Length; i++)
+            {
+                var c = channels.Table(i);
+                string name = c.String(0);
+                if (string.IsNullOrEmpty(name)) return false;
+                bool eye = c.U32(1) == 1;
+                float a = c.F32(8), b = c.F32(9), up = c.F32(10), down = c.F32(11), smooth = c.F32(2, eye ? 0.05f : 0.3f);
+                if (a < 0 || a > 180 || b < 0 || b > 180) return false;
+                if (!eye)
+                    look.Bones.Add(new LookAtBone { Name = name, YawLeft = a, YawRight = b, Up = up, Down = down, Smooth = smooth });
+                else
+                    look.Eyes.Add(new LookAtEye
+                    {
+                        Bone = name, Mesh = c.String(16), Material = c.String(17), YawLeft = a, YawRight = b, Up = up, Down = down, Smooth = smooth,
+                        Map = Floats(c.Vector(22), 9), Tracks = StringsOf(c.Vector(19)),
+                    });
+            }
+            return look.Bones.Count > 0;
         }
     }
 }
