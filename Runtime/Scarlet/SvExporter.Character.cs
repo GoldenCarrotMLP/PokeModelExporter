@@ -15,7 +15,9 @@ namespace PokeModelExporter.Scarlet
         // meshes) with the clips its motion folder's resource file lists (chara/motion_pc/base/p0_base.tracr) that the
         // filter keeps (by clip name: p0_00_01320_ballthrow01), each with its notifies (.traef). Root motion is left in
         // (a throw's step, a hop), segment scale compensation applied like on Pokemon. Null when the model isn't there.
-        public static byte[] ExportCharacter(Func<string, byte[]> readArchive, string modelPath, string motionFolder, Func<string, bool> filter, out List<string> clips)
+        // resource: the motion folder's resource file by name when it isn't the model's (an NPC body playing the
+        // player's clips: "p0_base").
+        public static byte[] ExportCharacter(Func<string, byte[]> readArchive, string modelPath, string motionFolder, Func<string, bool> filter, out List<string> clips, string resource = null)
         {
             clips = new List<string>();
             int slash = modelPath.LastIndexOf('/');
@@ -24,7 +26,8 @@ namespace PokeModelExporter.Scarlet
             if (read(file) == null) return null;
             var model = TrinityModelReader.Read(file, read);
             if (!motionFolder.EndsWith("/")) motionFolder += "/";
-            var tracr = readArchive(motionFolder + model.Name + ".tracr") ?? readArchive(motionFolder + model.Name + "_base.tracr");
+            string named = resource ?? model.Name;
+            var tracr = readArchive(motionFolder + named + ".tracr") ?? readArchive(motionFolder + named + "_base.tracr");
             var files = tracr != null ? TrinityAnimationReader.ClipNamesFromResource(tracr) : new List<string>();
             foreach (var clipFile in files)
             {

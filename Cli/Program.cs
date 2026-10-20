@@ -926,11 +926,11 @@ switch (rest[0])
         break;
     }
 
-    case "chara": // chara <model path> <motion folder> [--clips <regex>] --out <file.glb>: a person's skeleton + clips (the trainer's motions)
+    case "chara": // chara <model path> <motion folder> [--clips <regex>] [--resource <name>, e.g. p0_base for an NPC playing the player's clips] --out <file.glb>: a person's skeleton + clips (the trainer's motions)
     {
-        int o = rest.IndexOf("--out"), c = rest.IndexOf("--clips");
+        int o = rest.IndexOf("--out"), c = rest.IndexOf("--clips"), rs = rest.IndexOf("--resource");
         var pattern = c >= 0 ? new System.Text.RegularExpressions.Regex(rest[c + 1]) : null;
-        var glb = SvExporter.ExportCharacter(archive.Read, rest[1], rest[2], n => pattern == null || pattern.IsMatch(n), out var names);
+        var glb = SvExporter.ExportCharacter(archive.Read, rest[1], rest[2], n => pattern == null || pattern.IsMatch(n), out var names, rs >= 0 ? rest[rs + 1] : null);
         if (glb == null) { Console.Error.WriteLine("not found: " + rest[1]); return 1; }
         string outFile = Path.GetFullPath(o >= 0 ? rest[o + 1] : "chara.glb");
         File.WriteAllBytes(outFile, glb);
