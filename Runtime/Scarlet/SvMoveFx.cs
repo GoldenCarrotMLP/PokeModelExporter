@@ -103,8 +103,11 @@ namespace PokeModelExporter.Scarlet
         public static string Export(int move, IReadOnlyDictionary<string, byte[]> timelines, IReadOnlyDictionary<string, byte[]> sceneObjects,
             Func<string, byte[]> readParticles, out int emitterCount, Action<string, string, int, int> onTexture = null,
             Action<string, string, BfresPrimitives.Primitive> onPrimitive = null, string folder = null,
-            IReadOnlyDictionary<string, IReadOnlyList<byte[]>> extraScenes = null, IReadOnlyDictionary<string, TrinityAnimationReader.CameraClip> cameras = null)
+            IReadOnlyDictionary<string, IReadOnlyList<byte[]>> extraScenes = null, IReadOnlyDictionary<string, TrinityAnimationReader.CameraClip> cameras = null,
+            IEnumerable<string> extraParticles = null)
         {
+            // extraParticles: particle files to include as effects by their own name though no scene names them (the
+            // overworld's mood icons, effect/field/icon/ef_icon, which the game starts from code).
             // extraScenes: more scene files per timeline (the Terastal cinematic's per-type objects live in 19 more);
             // cameras: camera cuts by file stem, written under "cameras".
             // The effect's folder and file stem: a move's (effect/battle_ew/ew0085) or a battle system effect's
@@ -116,6 +119,7 @@ namespace PokeModelExporter.Scarlet
             w.BeginObject().Name("version").Value(1).Name("move").Value(move).Name("fps").Value(60);
             w.Name("variants").BeginArray();
             // Effects without a timeline (the field's weather): the game starts every effect of the scene from code.
+            foreach (var path in extraParticles ?? Enumerable.Empty<string>()) effects[System.IO.Path.GetFileNameWithoutExtension(path)] = path;
             if (timelines.Count == 0)
                 foreach (var sot in sceneObjects.Values)
                     foreach (var paths in SvSceneObjects.Read(sot).Values)

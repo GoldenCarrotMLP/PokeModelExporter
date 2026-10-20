@@ -1144,6 +1144,11 @@ switch (rest[0])
                 .Where(p => System.Text.RegularExpressions.Regex.IsMatch(p, @"^ik_demo/ee/m_shinka_(poke|pm[0-9a-z_]+)/m_shinka_[a-z0-9_]+\.trtml$")).ToList();
             Console.WriteLine($"Mega Evolution: {byMove[Mega].Count} timelines");
         }
+        // The overworld's mood icons (effect/field/icon/ef_icon: ef_wakunasi_angry, _hunger, _exclamation, _question, _onpu,
+        // _ase, _moyamoya, _silence and their _z variants, ef_symbol_*): the wild Pokemon's balloons, started from code;
+        // into picnic.json beside the picnic's own.
+        var icons = File.ReadLines(rest[h + 1]).Select(l => l.Substring(l.IndexOf(' ') + 1))
+            .Where(p => System.Text.RegularExpressions.Regex.IsMatch(p, @"^effect/field/icon/ef_icon/ef_[a-z0-9_]+\.ptcl$")).ToList();
         long total = 0;
         int files = 0, emitters = 0;
         var watch = System.Diagnostics.Stopwatch.StartNew();
@@ -1192,7 +1197,7 @@ switch (rest[0])
             string json = SvMoveFx.Export(kv.Key, timelines, scenes, archive.Read, out int count,
                 (path, name, cx, cy) => { if (!textureSources.ContainsKey(name)) textureSources[name] = (path, cx, cy); },
                 (path, name, prim) => { if (!primitiveShapes.ContainsKey(name)) { var shape = FxPrimitiveShape.Analyze(prim); shape.Source = path; primitiveShapes[name] = shape; } },
-                folder, extraScenes, cameras);
+                folder, extraScenes, cameras, kv.Key == Picnic ? icons : null);
             string file = Path.Combine(outDir, kv.Key == Picnic ? "picnic.json" : kv.Key == Mega ? "mega.json" : kv.Key == Tera ? "tera.json"
                 : kv.Key <= -2100 ? $"eb{-2100 - kv.Key:D3}.json" : kv.Key <= -2000 ? $"etb{-2000 - kv.Key:D3}.json"
                 : kv.Key <= -1000 ? $"ee{-1000 - kv.Key:D3}.json" : kv.Key < 0 ? $"es{-kv.Key:D3}.json" : $"{kv.Key:D4}.json");
