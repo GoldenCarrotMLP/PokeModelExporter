@@ -11,7 +11,7 @@ namespace PokeModelExporter.Scarlet
     // One-call export of a Scarlet/Violet Pokemon: model, textures, clips with their notifies and
     // tracks, baked materials, GLB, plus its config and a compact actor manifest for game engines.
     // Shared by the command-line tool and in-game importers.
-    public sealed class SvExporter : IDisposable
+    public sealed partial class SvExporter : IDisposable
     {
         readonly Oodle _oodle;
         public TrinityArchive Archive { get; }
@@ -44,6 +44,28 @@ namespace PokeModelExporter.Scarlet
             public Func<string, bool> Clips; // which clips to keep (name without the model prefix, e.g. 00001_battlewait01_loop); null = all
             public bool MainClipSetOnly;     // only the main clip set (see MainClipSet)
             public IEnumerable<string> FolderFiles; // every file of the model folder, if known (hash list)
+            public Donor Donor;              // another model of the species to inherit from (a Mega's base form), see BorrowClips
+        }
+
+        // A model that lends what another lacks (owner 2026-10-19: Legends Z-A's Megas have no idle / sleep / emote
+        // clips and a look-at authored to barely move; their base forms in Scarlet/Violet have them all): its clips
+        // are read by bone name onto the other skeleton, its clip chains and flags come along, and its look-at
+        // limits replace the other's for the same bones.
+        public sealed class Donor
+        {
+            public string ModelName;
+            public Func<string, byte[]> Read;    // a file of the donor's model folder
+            public SvAnimController Controller;  // its chains, flags and look-at (null when the files are missing)
+        }
+
+        public Donor MakeDonor(SvCatalog.Entry entry)
+        {
+            string folder = entry.DataRoot + entry.Folder;
+            Func<string, byte[]> read = file => Archive.Read(folder + file);
+            string name = Path.GetFileNameWithoutExtension(entry.ModelPath);
+            SvAnimController controller = null;
+            try { controller = SvAnimController.Read(name, read); } catch (Exception) { controller = null; }
+            return new Donor { ModelName = name, Read = read, Controller = controller };
         }
 
         public sealed class Result
@@ -89,6 +111,8 @@ namespace PokeModelExporter.Scarlet
             catch (Exception) { controller = null; } // an unexpected controller layout: the model still exports
             // The face clips (eye01, mouth01) always come along: the face layer plays them over any body clip.
             if (options.Animations) LoadClips(model, read, options.Clips, options.MainClipSetOnly, controller?.Faces.Select(f => f.Clip));
+            if (options.Animations && options.Donor != null) BorrowClips(model, options.Donor, options.MainClipSetOnly);
+            if (options.Donor?.Controller?.LookAt != null && controller?.LookAt != null) InheritLookAt(controller.LookAt, options.Donor.Controller.LookAt);
             if (options.Animations && options.MainClipSetOnly && model.Animations.Count > 0) KeepLocatorSet(model, model.Animations[0].Name[0]);
             ScaleCompensation.Apply(model); // after the node list is final (locators are expected last before this)
 
@@ -122,7 +146,7 @@ namespace PokeModelExporter.Scarlet
                 Model = model,
                 Config = config,
                 Glb = GlbWriter.Write(model, baked.Textures, m => baked.Mappings[m.Name], extra),
-                ActorManifest = ActorManifest.Write(model, entry, config, options.Shiny, controller),
+                ActorManifest = ActorManifest.Write(model, entry, config, options.Shiny, controller, options.Donor?.Controller),
                 Controller = controller,
                 Read = read,
             };
@@ -286,6 +310,100 @@ namespace PokeModelExporter.Scarlet
                     foreach (var mesh in model.Meshes.Where(m => m.Name == v.Mesh)) mesh.Hidden = true;
         }
 
+        // The part of a clip name after its number: 00000_defaultwait01_loop -> defaultwait01_loop (the games number the
+        // same clips alike, but the part is what the slots and chains go by).
+        public static string ClipPart(string name) => name.Length > 6 && char.IsDigit(name[0]) && name[5] == '_' ? name.Substring(6) : name;
+
+        // Clips the model lacks, from the donor (its main clip set when mainSetOnly), read onto this skeleton by bone
+        // name: tracks of bones this model doesn't have are dropped, and a clip that would lose more than 40% of its
+        // tracks is left out (a different rig). Face clips stay the model's own (eyelid rigs differ), and so do the
+        // donor's material / visibility tracks (other meshes). Borrowed clips keep the donor's names, so the donor's
+        // chains (sleep01_start -> loop -> end) and flags apply to them (ActorManifest).
+        public static void BorrowClips(ModelData model, Donor donor, bool mainSetOnly)
+        {
+            var tracr = donor.Read(donor.ModelName + "_base.tracr");
+            if (tracr == null) return;
+            var files = TrinityAnimationReader.ClipNamesFromResource(tracr);
+            string ClipName(string file) => Path.GetFileNameWithoutExtension(file).Substring(donor.ModelName.Length + 1);
+            char? set = mainSetOnly ? MainClipSet(files.Select(ClipName)) : null;
+            var have = new HashSet<string>(model.Animations.Select(a => ClipPart(a.Name)));
+            var bones = new HashSet<string>(model.Nodes.Select(n => n.Name));
+            // Bones of the same name that rest differently (Mega Lucario's feelers are longer and set another way than
+            // Lucario's) aren't the same part: the donor's clips don't move them (owner 2026-10-19: borrowed clips swung
+            // the Mega's feelers like the base form's), they keep their own rest pose, and so do the bones under them.
+            var mismatched = Mismatched(model, TrinityModelReader.ReadSkeletonOnly(donor.ModelName + ".trmdl", donor.Read));
+            foreach (var file in files)
+            {
+                string clip = ClipName(file);
+                if (set != null && clip[0] != set) continue;
+                if (clip.StartsWith("08")) continue; // face clips
+                if (have.Contains(ClipPart(clip))) continue;
+                var data = donor.Read(file);
+                if (data == null) continue;
+                AnimationData anim;
+                try { anim = TrinityAnimationReader.Read(data, clip); }
+                catch (Exception) { continue; }
+                int total = anim.Tracks.Count;
+                anim.Tracks.RemoveAll(t => !bones.Contains(t.Bone));
+                if (total == 0 || anim.Tracks.Count < total * 0.6f) continue; // a different rig
+                anim.Tracks.RemoveAll(t => mismatched.Contains(t.Bone)); // parts that differ keep their own rest pose
+                var traef = donor.Read(Path.ChangeExtension(file, ".traef"));
+                if (traef != null) try { anim.Events = TrinityAnimationReader.ReadEvents(traef); } catch (Exception) { }
+                PinRootMotion(anim);
+                anim.Borrowed = true;
+                model.Animations.Add(anim);
+                have.Add(ClipPart(clip));
+            }
+        }
+
+        // Bones whose rest pose differs from the donor's bone of the same name (turned over 20 degrees, a length off by a
+        // third, or pointing over 25 degrees elsewhere), with everything under them.
+        static HashSet<string> Mismatched(ModelData model, ModelData donor)
+        {
+            var theirs = new Dictionary<string, NodeData>();
+            foreach (var n in donor.Nodes) theirs[n.Name] = n;
+            // A chain of numbered segments that is longer here (Mega Lucario's feelers run to _06, Lucario's to _03) is
+            // another part: none of it is moved by the donor's clips.
+            string Family(string name) { int u = name.LastIndexOf('_'); return u > 0 && name.Substring(u + 1).All(char.IsDigit) ? name.Substring(0, u) : null; }
+            Dictionary<string, int> Segments(ModelData m) => m.Nodes.Where(n => !n.IsLocator).Select(n => Family(n.Name)).Where(f => f != null)
+                .GroupBy(f => f).ToDictionary(g => g.Key, g => g.Count());
+            var mineCount = Segments(model);
+            var theirCount = Segments(donor);
+            var longer = new HashSet<string>(mineCount.Where(kv => theirCount.TryGetValue(kv.Key, out int t) && kv.Value > t).Select(kv => kv.Key));
+            var bad = new HashSet<string>();
+            for (int i = 0; i < model.Nodes.Count; i++)
+            {
+                var n = model.Nodes[i];
+                if (n.IsLocator) continue;
+                bool parentBad = n.Parent >= 0 && n.Parent < model.Nodes.Count && bad.Contains(model.Nodes[n.Parent].Name);
+                if (parentBad || Family(n.Name) is string family && longer.Contains(family)) { bad.Add(n.Name); continue; }
+                if (!theirs.TryGetValue(n.Name, out var d)) continue;
+                float dot = Math.Abs(System.Numerics.Quaternion.Dot(n.Rotation, d.Rotation));
+                float turn = (float)(2 * Math.Acos(Math.Min(1, dot)) * 180 / Math.PI);
+                float a = n.Translation.Length(), b = d.Translation.Length();
+                bool length = a > 1e-3f && b > 1e-3f && (a / b > 1.33f || b / a > 1.33f);
+                bool direction = a > 1e-3f && b > 1e-3f
+                    && Math.Acos(Math.Max(-1, Math.Min(1, System.Numerics.Vector3.Dot(n.Translation / a, d.Translation / b)))) * 180 / Math.PI > 25;
+                if (turn > 20 || length || direction) bad.Add(n.Name);
+            }
+            return bad;
+        }
+
+        // The donor's look-at limits for the bones both chains have (a Z-A Mega's head is authored to turn 10 degrees
+        // and look 4 up; its base form's turns 30-40): the eyes stay the model's own.
+        public static void InheritLookAt(SvAnimController.LookAtInfo target, SvAnimController.LookAtInfo donor)
+        {
+            foreach (var bone in target.Bones)
+            {
+                var from = donor.Bones.FirstOrDefault(b => b.Name == bone.Name);
+                if (from == null) continue;
+                bone.YawLeft = from.YawLeft;
+                bone.YawRight = from.YawRight;
+                bone.Up = from.Up;
+                bone.Down = from.Down;
+            }
+        }
+
         // Walking and running loops carry the Pokemon forward on the skeleton's "origin" bone (Pikachu's walk 0.6 per
         // second), then the loop jumps back. Whoever plays them moves the Pokemon itself, so the bone stays in place over
         // the ground and the speed is kept (RootSpeed) to match the clip's pace to the real movement. Loops only: attack
@@ -393,9 +511,19 @@ namespace PokeModelExporter.Scarlet
     // Times in seconds.
     public static class ActorManifest
     {
-        public static string Write(ModelData model, SvCatalog.Entry entry, SvConfig config, bool shiny, SvAnimController controller = null)
+        public static string Write(ModelData model, SvCatalog.Entry entry, SvConfig config, bool shiny, SvAnimController controller = null, SvAnimController donor = null)
         {
             var w = new JsonWriter();
+            // A donor's chains and flags cover the clips borrowed from it (SvExporter.BorrowClips).
+            var chains = new List<SvAnimController.Chain>(controller?.Chains ?? new List<SvAnimController.Chain>());
+            if (donor != null)
+                foreach (var c in donor.Chains) if (chains.All(x => x.Name != c.Name)) chains.Add(c);
+            List<string> FlagsOf(string clip)
+            {
+                if (controller != null && controller.ClipFlags.TryGetValue(clip, out var own) && own.Count > 0) return own;
+                if (donor != null && donor.ClipFlags.TryGetValue(clip, out var lent) && lent.Count > 0) return lent;
+                return null;
+            }
             w.BeginObject();
             w.Name("version").Value(1);
             // The animation controller's face layers and look-at (SvAnimController): poses as normalized times of the
@@ -439,11 +567,11 @@ namespace PokeModelExporter.Scarlet
                 }
             }
             // The body machine's clip chains (start -> loop -> end), only those whose clips were exported.
-            if (controller != null && controller.Chains.Count > 0)
+            if (chains.Count > 0)
             {
                 var exported = new HashSet<string>(model.Animations.Select(a => a.Name));
                 w.Name("chains").BeginObject();
-                foreach (var c in controller.Chains)
+                foreach (var c in chains)
                 {
                     if (!exported.Contains(c.Start) || !exported.Contains(c.Loop)) continue;
                     w.Name(c.Name).BeginObject().Name("start").Value(c.Start).Name("loop").Value(c.Loop);
@@ -468,7 +596,8 @@ namespace PokeModelExporter.Scarlet
                 w.Name(a.Name).BeginObject();
                 w.Name("duration").Value(a.Duration).Name("loop").Value(a.Loop);
                 if (a.RootSpeed > 0) w.Name("rootSpeed").Value(a.RootSpeed);
-                if (controller != null && controller.ClipFlags.TryGetValue(a.Name, out var flags) && flags.Count > 0)
+                if (a.Borrowed) w.Name("borrowed").Value(true);
+                if (FlagsOf(a.Name) is List<string> flags)
                 {
                     w.Name("flags").BeginArray();
                     foreach (var f in flags) w.Value(f);

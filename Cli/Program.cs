@@ -330,12 +330,22 @@ switch (rest[0])
         break;
     }
 
-    case "states": // states <dex> [form] [gender]: the body's state machine (how the game chains the clips)
+    case "states": // states <dex> [form] [gender] | states <folder/> <model>: the body's state machine (how the game chains the clips)
     {
-        var entry = FindEntry(SvCatalog.Open(archive.Read), archive, rest);
-        if (entry == null) { Console.Error.WriteLine("no model"); return 1; }
-        string folder = entry.DataRoot + entry.Folder;
-        string modelName = Path.GetFileNameWithoutExtension(entry.ModelPath);
+        string folder, modelName;
+        if (rest.Count > 2 && rest[1].Contains('/'))
+        {
+            // A person's motion folder (chara/motion_pc/base/ p0: its p0_base.tracs).
+            folder = rest[1].EndsWith("/") ? rest[1] : rest[1] + "/";
+            modelName = rest[2];
+        }
+        else
+        {
+            var entry = FindEntry(SvCatalog.Open(archive.Read), archive, rest);
+            if (entry == null) { Console.Error.WriteLine("no model"); return 1; }
+            folder = entry.DataRoot + entry.Folder;
+            modelName = Path.GetFileNameWithoutExtension(entry.ModelPath);
+        }
         var controller = SvAnimController.Read(modelName, file => archive.Read(folder + file));
         if (controller.Body == null) { Console.Error.WriteLine("no body machine"); return 1; }
         static string Kind(uint type) => type switch { 1 => "entry", 2 => "exit", 3 => "any", 4 => "top", _ => "" };
@@ -916,6 +926,18 @@ switch (rest[0])
         break;
     }
 
+    case "chara": // chara <model path> <motion folder> [--clips <regex>] --out <file.glb>: a person's skeleton + clips (the trainer's motions)
+    {
+        int o = rest.IndexOf("--out"), c = rest.IndexOf("--clips");
+        var pattern = c >= 0 ? new System.Text.RegularExpressions.Regex(rest[c + 1]) : null;
+        var glb = SvExporter.ExportCharacter(archive.Read, rest[1], rest[2], n => pattern == null || pattern.IsMatch(n), out var names);
+        if (glb == null) { Console.Error.WriteLine("not found: " + rest[1]); return 1; }
+        string outFile = Path.GetFullPath(o >= 0 ? rest[o + 1] : "chara.glb");
+        File.WriteAllBytes(outFile, glb);
+        Console.WriteLine($"{names.Count} clips, {glb.Length / 1024} KB -> {outFile}");
+        foreach (var n in names) Console.WriteLine("  " + n);
+        break;
+    }
     case "fxmodel": // fxmodel <model path in the archive> --out <file.glb>: a move's effect model (Earthquake's rocks...)
     {
         int o = rest.IndexOf("--out");

@@ -32,7 +32,8 @@ namespace PokeModelExporter.Ctr
             public float[] Frames, Values, Slopes; // Hermite keys (slopes per frame)
         }
 
-        public sealed class BoneTrack { public string Bone; public Curve[] Channels = new Curve[9]; }
+        // Euler: the track's flag bit 31: its rotation keys are Euler angles (X applied first); clear, an axis x half the angle.
+        public sealed class BoneTrack { public string Bone; public bool Euler; public Curve[] Channels = new Curve[9]; }
         public sealed class UvTrack { public string Material; public int Unit; public Curve[] Channels = new Curve[5]; }
         public sealed class ColorTrack { public string Material; public int Index; public Curve[] Channels = new Curve[4]; }
         public sealed class CameraTrack { public string Name; public Curve[] Channels = new Curve[10]; }
@@ -87,7 +88,7 @@ namespace PokeModelExporter.Ctr
             for (int b = 0; b < count; b++)
             {
                 uint flags = BitConverter.ToUInt32(d, p); int length = BitConverter.ToInt32(d, p + 4);
-                var t = new BoneTrack { Bone = names[b] };
+                var t = new BoneTrack { Bone = names[b], Euler = (flags & 0x80000000u) != 0 };
                 int q = p + 8;
                 for (int c = 0; c < 9; c++) t.Channels[c] = ReadCurve(d, ref q, (int)(flags >> (3 * c) & 7), m.FrameCount);
                 m.Bones.Add(t);

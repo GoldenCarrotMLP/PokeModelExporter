@@ -26,6 +26,7 @@ namespace PokeModelExporter.Model
         public List<BoneTrackData> Tracks = new List<BoneTrackData>();
         public List<AnimationEvent> Events = new List<AnimationEvent>();
         public float RootSpeed; // ground speed the clip's root motion had (model units per second) before it was pinned in place
+        public bool Borrowed;   // taken from another model of the species (a Mega's base form) by bone name, see SvExporter.BorrowClips
         // Non-skeletal tracks (SV .tracm): material parameters, mesh visibility, blend shapes.
         public List<MaterialTrackData> MaterialTracks = new List<MaterialTrackData>();
         public List<VisibilityTrackData> VisibilityTracks = new List<VisibilityTrackData>();

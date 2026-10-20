@@ -63,6 +63,18 @@ namespace PokeModelExporter.Scarlet
             return model;
         }
 
+        // The skeleton alone (the nodes of the model's .trskl), for comparing rigs without reading meshes.
+        public static ModelData ReadSkeletonOnly(string trmdlName, Func<string, byte[]> read)
+        {
+            var model = new ModelData { Name = Path.GetFileNameWithoutExtension(trmdlName) };
+            var data = read(trmdlName);
+            if (data == null) return model;
+            var skeleton = FbTable.Root(data).Table(2).String(0);
+            var skl = skeleton != null ? read(skeleton) : null;
+            if (skl != null) ReadSkeleton(FbTable.Root(skl), model);
+            return model;
+        }
+
         public static int LodCount(byte[] trmdl) => FbTable.Root(trmdl).Vector(1).Length;
 
         static byte[] Require(Func<string, byte[]> read, string name) =>
