@@ -1086,6 +1086,7 @@ switch (rest[0])
         // primitives.json are then merged into the existing ones instead of rewritten from this subset.
         var only = new HashSet<int>(rest.Skip(1).Where(a => int.TryParse(a, out _)).Select(int.Parse).Where(n => n != 0 && (h < 0 || n.ToString() != rest[h + 1])));
         var byMove = new SortedDictionary<int, List<string>>();
+        const int Picnic = -4001;
         foreach (var line in File.ReadLines(rest[h + 1]))
         {
             string path = line.Substring(line.IndexOf(' ') + 1);
@@ -1107,8 +1108,14 @@ switch (rest[0])
             // plib_ball_conversion's plibID): "ballout" when a Pokemon comes out of it, "capture" when one is drawn in;
             // as -2101.. (eb<n>.json), no timeline either.
             var eb = System.Text.RegularExpressions.Regex.Match(path, @"^effect/battle_eb/eb(\d{3})/eb\d{3}_0\.trsot$");
-            if (!m.Success && !es.Success && !ee.Success && !etb.Success && !eb.Success) continue;
-            int move = es.Success ? -int.Parse(es.Groups[1].Value) : ee.Success ? -1000 - int.Parse(ee.Groups[1].Value)
+            // The picnic's effects (world/obj_template/parts/picnic/effect/<name>_/<name>_0.trsot -> effect/appli/picnic*):
+            // the Pokemon's emotions (picnic_heart_1..5, picnic_happy, picnic_laugh, picnic_onpu notes, picnic_question,
+            // picnic_exclamation, picnic_ase sweat, picnic_moyamoya, picnic_sleep...) and the wash (picnic_awa foam,
+            // picnic_awabreak, picnic_shower, picnic_waterdrop, picnic_washedkirakira), all in one file as -4001
+            // (picnic.json), no timeline: the game starts them from code. Used by the petting / washing screen.
+            bool picnic = System.Text.RegularExpressions.Regex.IsMatch(path, @"^world/obj_template/parts/picnic/effect/[a-z0-9_]+_/[a-z0-9_]+_0\.trsot$");
+            if (!m.Success && !es.Success && !ee.Success && !etb.Success && !eb.Success && !picnic) continue;
+            int move = picnic ? Picnic : es.Success ? -int.Parse(es.Groups[1].Value) : ee.Success ? -1000 - int.Parse(ee.Groups[1].Value)
                 : etb.Success ? -2000 - int.Parse(etb.Groups[1].Value) : eb.Success ? -2100 - int.Parse(eb.Groups[1].Value)
                 : int.Parse(m.Groups[1].Success ? m.Groups[1].Value : m.Groups[4].Value);
             if (only.Count > 0 && !only.Contains(move)) continue;
@@ -1156,6 +1163,8 @@ switch (rest[0])
                 else if (stem.EndsWith("_0", StringComparison.Ordinal)) scenes[stem.Substring(0, stem.Length - 2)] = data;
             }
             if (timelines.Count == 0 && kv.Key > -2000 && kv.Key != BallThrow) continue;
+            // The picnic's scene files each hold one effect; keyed by their folder so none replaces another.
+            if (kv.Key == Picnic) { scenes.Clear(); foreach (var path in kv.Value) if (archive.Read(path) is byte[] sot) scenes[path] = sot; }
             if (kv.Key == Mega && megaScene != null) foreach (var stem in timelines.Keys) scenes[stem] = megaScene;
             // Later hits of multi-hit moves (ew0024_2: Double Kick's second kick) have no scene objects of their own:
             // they play the first hit's objects (73 timelines). _1.trsot files repeat the _0 ones.
@@ -1177,14 +1186,14 @@ switch (rest[0])
                     if (archive.Read($"demo/ej/ej_transform01/ej_transform01_cam_c{c:D3}.trcma") is byte[] cma)
                         cameras[$"ej_transform01_cam_c{c:D3}"] = TrinityAnimationReader.ReadCamera(cma);
             }
-            string folder = kv.Key == Mega ? "ik_demo/ee/m_shinka" : kv.Key == Tera ? "demo/ej/ej_transform01"
+            string folder = kv.Key == Picnic ? "effect/appli/picnic" : kv.Key == Mega ? "ik_demo/ee/m_shinka" : kv.Key == Tera ? "demo/ej/ej_transform01"
                 : kv.Key <= -2100 ? $"effect/battle_eb/eb{-2100 - kv.Key:D3}" : kv.Key <= -2000 ? $"effect/battle_etb/etb{-2000 - kv.Key:D3}"
                 : kv.Key <= -1000 ? $"effect/battle_ee/ee{-1000 - kv.Key:D3}" : kv.Key < 0 ? $"effect/battle_es/es{-kv.Key:D3}" : null;
             string json = SvMoveFx.Export(kv.Key, timelines, scenes, archive.Read, out int count,
                 (path, name, cx, cy) => { if (!textureSources.ContainsKey(name)) textureSources[name] = (path, cx, cy); },
                 (path, name, prim) => { if (!primitiveShapes.ContainsKey(name)) { var shape = FxPrimitiveShape.Analyze(prim); shape.Source = path; primitiveShapes[name] = shape; } },
                 folder, extraScenes, cameras);
-            string file = Path.Combine(outDir, kv.Key == Mega ? "mega.json" : kv.Key == Tera ? "tera.json"
+            string file = Path.Combine(outDir, kv.Key == Picnic ? "picnic.json" : kv.Key == Mega ? "mega.json" : kv.Key == Tera ? "tera.json"
                 : kv.Key <= -2100 ? $"eb{-2100 - kv.Key:D3}.json" : kv.Key <= -2000 ? $"etb{-2000 - kv.Key:D3}.json"
                 : kv.Key <= -1000 ? $"ee{-1000 - kv.Key:D3}.json" : kv.Key < 0 ? $"es{-kv.Key:D3}.json" : $"{kv.Key:D4}.json");
             File.WriteAllText(file, json);
