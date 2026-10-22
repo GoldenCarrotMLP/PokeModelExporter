@@ -1134,6 +1134,15 @@ switch (rest[0])
         // scene file (m_shinka_cmn). The trainer's parts (m_shinka_pc, m_shinka_tr*) wait for trainer models. Only this from
         // Z-A: textures.json / primitives.json are merged into the existing ones.
         const int Mega = -3002;
+        // Evolution (Scarlet/Violet's overworld scene, effect/demo/sd9110_evolution), as -3003 (evolution.json): before
+        // (the glow and the charge), the change (outdoor / indoor), after_success, after_cancel; outdoor and indoor
+        // variants with their own scene files. TARGET_1 is the old form (ATK), TARGET_2 the new (DEF).
+        const int Evolution = -3003;
+        const string EvolutionFolder = "effect/demo/sd9110_evolution/evolution";
+        bool wantEvolution = only.Count == 0 || only.Contains(Evolution);
+        if (wantEvolution)
+            byMove[Evolution] = File.ReadLines(rest[h + 1]).Select(l => l.Substring(l.IndexOf(' ') + 1))
+                .Where(p => p.StartsWith(EvolutionFolder + "/", StringComparison.Ordinal) && (p.EndsWith(".trtml", StringComparison.Ordinal) || p.EndsWith("_0.trsot", StringComparison.Ordinal))).ToList();
         bool za = SvCatalog.Open(archive.Read)?.Game == "legends-za";
         byte[] megaScene = null;
         if (za)
@@ -1171,6 +1180,13 @@ switch (rest[0])
             // The picnic's scene files each hold one effect; keyed by their folder so none replaces another.
             if (kv.Key == Picnic) { scenes.Clear(); foreach (var path in kv.Value) if (archive.Read(path) is byte[] sot) scenes[path] = sot; }
             if (kv.Key == Mega && megaScene != null) foreach (var stem in timelines.Keys) scenes[stem] = megaScene;
+            if (kv.Key == Evolution)
+            {
+                // Each timeline plays with its own place's scene: the indoor ones with sd9110_evolution_indoor.
+                var outdoor = scenes.TryGetValue("sd9110_evolution", out var o0) ? o0 : null;
+                var indoor = scenes.TryGetValue("sd9110_evolution_indoor", out var i0) ? i0 : outdoor;
+                foreach (var stem in timelines.Keys.ToList()) scenes[stem] = stem.Contains("indoor") ? indoor : outdoor;
+            }
             // Later hits of multi-hit moves (ew0024_2: Double Kick's second kick) have no scene objects of their own:
             // they play the first hit's objects (73 timelines). _1.trsot files repeat the _0 ones.
             if (scenes.Count > 0)
@@ -1197,8 +1213,11 @@ switch (rest[0])
             string json = SvMoveFx.Export(kv.Key, timelines, scenes, archive.Read, out int count,
                 (path, name, cx, cy) => { if (!textureSources.ContainsKey(name)) textureSources[name] = (path, cx, cy); },
                 (path, name, prim) => { if (!primitiveShapes.ContainsKey(name)) { var shape = FxPrimitiveShape.Analyze(prim); shape.Source = path; primitiveShapes[name] = shape; } },
-                folder, extraScenes, cameras, kv.Key == Picnic ? icons : null);
-            string file = Path.Combine(outDir, kv.Key == Picnic ? "picnic.json" : kv.Key == Mega ? "mega.json" : kv.Key == Tera ? "tera.json"
+                kv.Key == Evolution ? EvolutionFolder + "/sd9110_evolution" : folder, extraScenes, cameras, kv.Key == Picnic ? icons : null,
+                kv.Key == Evolution ? new Dictionary<string, string> { ["TARGET_1"] = "ATK", ["TARGET_2"] = "DEF" } : null,
+                kv.Key == Evolution ? name => name.StartsWith("eff.", StringComparison.Ordinal) && archive.Read($"{EvolutionFolder}/sd9110_{name.Substring(4)}.ptcl") != null
+                    ? $"{EvolutionFolder}/sd9110_{name.Substring(4)}.ptcl" : null : null);
+            string file = Path.Combine(outDir, kv.Key == Picnic ? "picnic.json" : kv.Key == Mega ? "mega.json" : kv.Key == Tera ? "tera.json" : kv.Key == Evolution ? "evolution.json"
                 : kv.Key <= -2100 ? $"eb{-2100 - kv.Key:D3}.json" : kv.Key <= -2000 ? $"etb{-2000 - kv.Key:D3}.json"
                 : kv.Key <= -1000 ? $"ee{-1000 - kv.Key:D3}.json" : kv.Key < 0 ? $"es{-kv.Key:D3}.json" : $"{kv.Key:D4}.json");
             File.WriteAllText(file, json);

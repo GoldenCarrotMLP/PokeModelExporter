@@ -104,8 +104,12 @@ namespace PokeModelExporter.Scarlet
             Func<string, byte[]> readParticles, out int emitterCount, Action<string, string, int, int> onTexture = null,
             Action<string, string, BfresPrimitives.Primitive> onPrimitive = null, string folder = null,
             IReadOnlyDictionary<string, IReadOnlyList<byte[]>> extraScenes = null, IReadOnlyDictionary<string, TrinityAnimationReader.CameraClip> cameras = null,
-            IEnumerable<string> extraParticles = null)
+            IEnumerable<string> extraParticles = null, IReadOnlyDictionary<string, string> renameObjects = null,
+            Func<string, string> looseEffect = null)
         {
+            // renameObjects: timeline objects (and command targets) renamed to the ones the engine knows (the evolution
+            // scene's TARGET_1 / TARGET_2 = ATK / DEF). looseEffect: the particle file for an object no scene file names
+            // (the evolution's "eff.charge_01" is sd9110_charge_01.ptcl in its folder), null = none.
             // extraParticles: particle files to include as effects by their own name though no scene names them (the
             // overworld's mood icons, effect/field/icon/ef_icon, which the game starts from code).
             // extraScenes: more scene files per timeline (the Terastal cinematic's per-type objects live in 19 more);
@@ -145,6 +149,14 @@ namespace PokeModelExporter.Scarlet
                 {
                     if (!Possible(group)) continue;
                     foreach (var c in group.Tracks.SelectMany(t => t.Commands)) ToSvNames(c);
+                    if (renameObjects != null)
+                    {
+                        if (renameObjects.TryGetValue(group.Object, out var renamed)) group.Object = renamed;
+                        foreach (var c in group.Tracks.SelectMany(t => t.Commands))
+                            if (c.Parameters.TryGetValue("Target", out var tg) && tg is string ts && renameObjects.TryGetValue(ts, out var rt)) c.Parameters["Target"] = rt;
+                    }
+                    if (!objects.ContainsKey(group.Object) && looseEffect?.Invoke(group.Object) is string loose)
+                        objects[group.Object] = new List<string> { loose };
                     var commands = group.Tracks.SelectMany(t => t.Commands).Where(c => Keep(c.Type)).OrderBy(c => c.Start).ToList();
                     if (commands.Count == 0) continue;
                     w.BeginObject().Name("name").Value(group.Object);
