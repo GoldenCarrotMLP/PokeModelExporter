@@ -1200,8 +1200,10 @@ switch (rest[0])
             // entry hazards hurting a Pokemon as it comes in (ee040 Spikes, ee041 Toxic
             // Spikes, ee042 Stealth Rock), as -1040.. (ee<n>.json), and a thrown ball's effects (ee101: the
             // trail behind it, the flash as it opens, the beam drawing the Pokemon in, the close; no timeline, the game's
-            // code times them) as -1101.
-            var ee = System.Text.RegularExpressions.Regex.Match(path, @"^effect/battle_ee/ee(00[4-6]|04[0-2]|05[0-3]|101)/ee\d{3}(?:_0)?\.(trtml|trsot)$");
+            // code times them) as -1101, and the catch's (demo/ee/ee102..106 play them): ee102 / ee103 / ee104 the
+            // button's check light on the first / second / third shake, ee105 the success (the light on the ball, the
+            // stars in the air or on the ground, the warp as the ball is sent away), ee106 the break-out, as -1102..-1106.
+            var ee = System.Text.RegularExpressions.Regex.Match(path, @"^effect/battle_ee/ee(00[4-6]|04[0-2]|05[0-3]|10[1-6])/ee\d{3}(?:_0)?\.(trtml|trsot)$");
             // Weather on the field (etb001 rain, etb002 snow, etb003 sandstorm, etb004 sun), as -2001.. (etb<n>.json):
             // looping particles and an ambient sound, no timeline.
             var etb = System.Text.RegularExpressions.Regex.Match(path, @"^effect/battle_etb/etb(\d{3})/etb\d{3}_0\.trsot$");
@@ -1226,7 +1228,10 @@ switch (rest[0])
         // Terastallization (Docs/terastal-research.md), as -3001 (tera.json): the cinematic's timeline from demo/ with its
         // shared scene objects, every type's (ej_transform_start00..17, 99) and its camera cuts.
         const int Tera = -3001;
-        const int BallThrow = -1101; // effect/battle_ee/ee101: a thrown ball's effects, a scene without a timeline
+        const int BallThrow = -1101; // effect/battle_ee/ee101: a thrown ball's effects, a scene without a timeline (so are the catch's, to -1106)
+        // The success's particles its scene file doesn't name (the demo's code starts them): the stars when the ball lies on
+        // the ground (above and under it) and the warp as the caught Pokemon's ball is sent away.
+        var CatchSuccessExtras = new[] { "effect/battle_ee/ee105/ee105_01_sucsess_ground_top.ptcl", "effect/battle_ee/ee105/ee105_01_sucsess_ground_under.ptcl", "effect/battle_ee/ee105/ee105_sucsess_warp.ptcl" };
         var teraTimeline = "demo/ej/ej_transform01/ej_transform01.trtml";
         bool wantTera = only.Count == 0 || only.Contains(Tera);
         if (wantTera) byMove[Tera] = new List<string> { teraTimeline };
@@ -1277,7 +1282,7 @@ switch (rest[0])
                 if (path.EndsWith(".trtml", StringComparison.Ordinal)) timelines[stem] = data;
                 else if (stem.EndsWith("_0", StringComparison.Ordinal)) scenes[stem.Substring(0, stem.Length - 2)] = data;
             }
-            if (timelines.Count == 0 && kv.Key > -2000 && kv.Key != BallThrow) continue;
+            if (timelines.Count == 0 && kv.Key > -2000 && (kv.Key > BallThrow || kv.Key < BallThrow - 5)) continue; // ee101..106: scenes the code times
             // The picnic's scene files each hold one effect; keyed by their folder so none replaces another.
             if (kv.Key == Picnic) { scenes.Clear(); foreach (var path in kv.Value) if (archive.Read(path) is byte[] sot) scenes[path] = sot; }
             if (kv.Key == Mega && megaScene != null) foreach (var stem in timelines.Keys) scenes[stem] = megaScene;
@@ -1314,7 +1319,7 @@ switch (rest[0])
             string json = SvMoveFx.Export(kv.Key, timelines, scenes, archive.Read, out int count,
                 (path, name, cx, cy) => { if (!textureSources.ContainsKey(name)) textureSources[name] = (path, cx, cy); },
                 (path, name, prim) => { if (!primitiveShapes.ContainsKey(name)) { var shape = FxPrimitiveShape.Analyze(prim); shape.Source = path; primitiveShapes[name] = shape; } },
-                kv.Key == Evolution ? EvolutionFolder + "/sd9110_evolution" : folder, extraScenes, cameras, kv.Key == Picnic ? icons : null,
+                kv.Key == Evolution ? EvolutionFolder + "/sd9110_evolution" : folder, extraScenes, cameras, kv.Key == Picnic ? icons : kv.Key == BallThrow - 4 ? CatchSuccessExtras : null,
                 kv.Key == Evolution ? new Dictionary<string, string> { ["TARGET_1"] = "ATK", ["TARGET_2"] = "DEF" } : null,
                 kv.Key == Evolution ? name => name.StartsWith("eff.", StringComparison.Ordinal) && archive.Read($"{EvolutionFolder}/sd9110_{name.Substring(4)}.ptcl") != null
                     ? $"{EvolutionFolder}/sd9110_{name.Substring(4)}.ptcl" : null : null);
