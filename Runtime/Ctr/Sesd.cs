@@ -45,7 +45,33 @@ namespace PokeModelExporter.Ctr
 
         public static bool IsSesd(byte[] d) => d != null && d.Length >= 16 && d[0] == 'S' && d[1] == 'E' && d[2] == 'S' && d[3] == 'D';
 
-        public static Sesd Read(byte[] d)
+        public static Sesd Read(byte[] d) => Read(d, Sizes, Layouts);
+
+        // A field demo (GARC a/1/2/1, the DemoLib sequences the overworld plays: sys_fadeinbattle_default, the evolution,
+        // fly, trade scenes...). Same records, another command set (SequencePlayer.cro's; its size table isn't found yet).
+        // These sizes are the ones that read sys_fadeinbattle_default (entry 85) exactly to its end, every header in
+        // place; a command outside them throws. What they do (Docs/usum-research.md): 30 a model (a/0/9/8 id, ?, render
+        // path: 0 the world camera, 2 the screen), 32 its position (cm) and 33 its scale (a range tweens to them), 35 a
+        // motion (id, loop), 36 one more (?, id, ?, ?), 54 a camera clip (?, id), 115 the hand-over to the battle;
+        // 104, 105, 106, 117, 129 not known.
+        public static Sesd ReadField(byte[] d) => Read(d, FieldSizes, FieldLayouts);
+
+        static readonly int[] FieldSizes = Field(new[] { (30, 84), (32, 16), (33, 16), (35, 8), (36, 16), (54, 12), (104, 4), (105, 16), (106, 8), (115, 0), (117, 12), (129, 0) }, out FieldLayouts,
+            new[] { (30, "iii"), (32, "vi"), (33, "vi"), (35, "ib"), (36, "iiii"), (54, "ii"), (104, "i"), (105, "iiii"), (106, "if"), (117, "iii") });
+        static readonly string[] FieldLayouts;
+
+        static int[] Field((int cmd, int size)[] sizes, out string[] layouts, (int cmd, string layout)[] known)
+        {
+            var s = new int[300];
+            for (int i = 0; i < s.Length; i++) s[i] = -1;
+            foreach (var (cmd, size) in sizes) s[cmd] = size;
+            layouts = new string[300];
+            for (int i = 0; i < layouts.Length; i++) layouts[i] = "";
+            foreach (var (cmd, layout) in known) layouts[cmd] = layout;
+            return s;
+        }
+
+        static Sesd Read(byte[] d, int[] sizes, string[] layouts)
         {
             if (!IsSesd(d)) throw new System.IO.InvalidDataException("not a SESD file");
             var s = new Sesd { Version = BitConverter.ToInt32(d, 4), Length = BitConverter.ToInt32(d, 12) };
@@ -58,9 +84,9 @@ namespace PokeModelExporter.Ctr
                 if (s.Version >= 2) { r.Variant = BitConverter.ToUInt16(d, p); p += 2; }
                 if (s.Version >= 3) { r.Flag = BitConverter.ToUInt16(d, p); p += 2; }
                 r.Command = BitConverter.ToUInt16(d, p); p += 2;
-                if (r.Command >= Sizes.Length) throw new System.IO.InvalidDataException($"command {r.Command} at {p - 2:x}");
-                int end = p + Sizes[r.Command];
-                r.Args = Args(d, p, end, Layouts[r.Command]);
+                if (r.Command >= sizes.Length || sizes[r.Command] < 0) throw new System.IO.InvalidDataException($"command {r.Command} at {p - 2:x}");
+                int end = p + sizes[r.Command];
+                r.Args = Args(d, p, end, layouts[r.Command]);
                 p = end;
                 s.Records.Add(r);
             }

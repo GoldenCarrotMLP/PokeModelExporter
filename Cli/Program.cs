@@ -163,10 +163,52 @@ if (rest[0] == "sesd") // sesd <GARC a/0/8/8> <index>: an Ultra Sun/Moon battle 
     return 0;
 }
 
+if (rest[0] == "ctrfind") // ctrfind <romfs> <text>: every GARC entry (unpacked, and its container's sub-files) that contains the text (research)
+{
+    var needle = System.Text.Encoding.ASCII.GetBytes(rest[2]);
+    bool Has(byte[] d) => d != null && d.AsSpan().IndexOf(needle) >= 0;
+    foreach (var file in Directory.EnumerateFiles(rest[1], "*", SearchOption.AllDirectories))
+    {
+        List<List<byte[]>> garc;
+        try { garc = PokeModelExporter.Ctr.Garc.Read(file); } catch (Exception) { continue; }
+        for (int i = 0; i < garc.Count; i++)
+        {
+            byte[] d;
+            try { d = PokeModelExporter.Ctr.Garc.File0(garc, i); } catch (Exception) { continue; }
+            if (d == null) continue;
+            var subs = PokeModelExporter.Ctr.CtrTrainer.Container(d);
+            if (subs == null) { if (Has(d)) Console.WriteLine($"{Path.GetRelativePath(rest[1], file)} {i}"); continue; }
+            for (int k = 0; k < subs.Count; k++) if (Has(subs[k])) Console.WriteLine($"{Path.GetRelativePath(rest[1], file)} {i} sub {k}");
+        }
+    }
+    return 0;
+}
+
 if (rest[0] == "ctrmotion") // ctrmotion <GARC file> <index> [--out <file.json>]: an Ultra Sun/Moon (3DS) GF motion pack as JSON
 {
     var garc = PokeModelExporter.Ctr.Garc.Read(rest[1]);
     var data = PokeModelExporter.Ctr.Garc.File0(garc, int.Parse(rest[2]));
+    if (!PokeModelExporter.Ctr.GfMotion.IsMotion(data) && PokeModelExporter.Ctr.CtrTrainer.Container(data) is { } subs)
+    {
+        // A container (the trainer's motions: one per player body, sometimes more): each sub-file's tracks, or --sub n alone.
+        int pick = rest.IndexOf("--sub") is int si && si >= 0 ? int.Parse(rest[si + 1]) : -1;
+        Console.WriteLine($"container: {subs.Count} sub-files");
+        for (int i = 0; i < subs.Count; i++)
+        {
+            if (pick >= 0 && i != pick) continue;
+            if (!PokeModelExporter.Ctr.GfMotion.IsMotion(subs[i])) { Console.WriteLine($"sub {i}: {subs[i].Length} bytes, not a motion ({(subs[i].Length >= 4 ? System.Text.Encoding.ASCII.GetString(subs[i], 0, 4) : "")})"); continue; }
+            var sm = PokeModelExporter.Ctr.GfMotion.Read(subs[i]);
+            Console.WriteLine($"sub {i}: {sm.FrameCount} frames: {sm.Bones.Count} bone tracks, {sm.Uvs.Count} UV tracks, {sm.Colors.Count} colour tracks" + (sm.OtherSections.Count > 0 ? ", unread sections " + string.Join(",", sm.OtherSections) : ""));
+            foreach (var u in sm.Uvs) Console.WriteLine($"  uv {u.Material} unit {u.Unit}: " + string.Join(" ", u.Channels.Select((c, k) => !c.Animated ? "-" : c.Frames == null ? c.Constant.ToString("0.###") : $"{c.Frames.Length} keys")));
+            if (pick >= 0)
+                foreach (var u in sm.Uvs)
+                    for (int k = 0; k < u.Channels.Length; k++)
+                        if (u.Channels[k]?.Frames is { } fr)
+                            Console.WriteLine($"  uv {u.Material} channel {k}: " + string.Join(" ", fr.Select((f, i) => $"f{f:0.#}={u.Channels[k].Values[i]:0.####}")));
+            if (pick >= 0) Console.WriteLine("  bones: " + string.Join(", ", sm.Bones.Select(b => b.Bone)));
+        }
+        return 0;
+    }
     if (!PokeModelExporter.Ctr.GfMotion.IsMotion(data)) { Console.Error.WriteLine("not a GF motion pack"); return 1; }
     var mot = PokeModelExporter.Ctr.GfMotion.Read(data);
     Console.WriteLine($"{mot.FrameCount} frames{(mot.Loop ? ", loop" : "")}: {mot.Bones.Count} bone tracks, {mot.Uvs.Count} UV tracks, {mot.Colors.Count} colour tracks" +
@@ -184,9 +226,19 @@ if (rest[0] == "ctrmodel") // ctrmodel <GARC file> <index> --out <file.glb>: an 
 {
     var garc = PokeModelExporter.Ctr.Garc.Read(rest[1]);
     var data = PokeModelExporter.Ctr.Garc.File0(garc, int.Parse(rest[2]));
+    // A container (the trainers' bodies: a/1/7/4): its sub-file (--sub n, default 0).
+    if (!PokeModelExporter.Ctr.GfModelPack.IsPack(data) && PokeModelExporter.Ctr.CtrTrainer.Container(data) is { } parts)
+        data = parts[rest.IndexOf("--sub") is int si && si >= 0 ? int.Parse(rest[si + 1]) : 0];
     if (!PokeModelExporter.Ctr.GfModelPack.IsPack(data)) { Console.Error.WriteLine("not a GF model pack"); return 1; }
     var pack = PokeModelExporter.Ctr.GfModelPack.Read(data);
     int o = rest.IndexOf("--out");
+    int tx = rest.IndexOf("--textures"); // --textures <dir>: every decoded texture as PNG (reference only)
+    if (tx >= 0)
+    {
+        Directory.CreateDirectory(rest[tx + 1]);
+        foreach (var t in pack.Textures.Where(t => t.Rgba != null))
+            File.WriteAllBytes(Path.Combine(rest[tx + 1], t.Name + ".png"), Png.Encode(t.Rgba, t.Width, t.Height));
+    }
     foreach (var t in pack.Textures)
         Console.WriteLine($"texture {t.Name} {t.Width}x{t.Height} {PokeModelExporter.Ctr.PicaTexture.Name(t.Format)} mips {t.Mips}{(t.Rgba == null ? " (not decoded)" : "")}");
     foreach (var m in pack.Models)
@@ -998,6 +1050,55 @@ switch (rest[0])
                 if (parts.Count > 0) Console.WriteLine($"  {t.Bone,-24} {string.Join("  ", parts)}");
             }
         }
+        break;
+    }
+
+    case "tracm": // tracm <clip path in the archive>...: a clip's non-skeletal tracks (material parameters, mesh visibility, blend shapes) with their keys
+    {
+        foreach (var path in rest.Skip(1).Where(a => !a.StartsWith("--")))
+        {
+            var data = archive.Read(path);
+            if (data == null) { Console.Error.WriteLine("not found: " + path); return 1; }
+            var anim = new AnimationData { Name = Path.GetFileNameWithoutExtension(path) };
+            TrinityCurveReader.Read(data, anim);
+            Console.WriteLine($"{path}: {anim.FrameCount} frames @ {anim.FramesPerSecond} fps");
+            string Keys<T>(Keys<T> k, Func<T, string> f) => k == null ? "-" : string.Join(" ", k.Times.Select((t, i) => $"f{t:0.#}={f(k.Values[i])}"));
+            string F(float v) => v.ToString("0.###", System.Globalization.CultureInfo.InvariantCulture);
+            foreach (var t in anim.MaterialTracks)
+                Console.WriteLine($"  material {t.Mesh} / {t.Material} . {t.Parameter}\n    R {Keys(t.R, F)}\n    G {Keys(t.G, F)}\n    B {Keys(t.B, F)}\n    A {Keys(t.A, F)}");
+            foreach (var t in anim.VisibilityTracks)
+                Console.WriteLine($"  visible {t.Mesh}: {(t.Fixed.HasValue ? (t.Fixed.Value ? "always" : "never") : Keys(t.Keys, b => b ? "on" : "off"))}");
+            foreach (var t in anim.MorphTracks)
+                Console.WriteLine($"  shape {t.Mesh} / {t.Shape}: {Keys(t.Weight, F)}");
+        }
+        break;
+    }
+
+    case "faces": // faces <face motion folder> --hashes <hashes_inside_fd.txt> [--clips <regex>]: per clip, the blend shapes it moves (peak weight); then every shape's use count
+    {
+        string folder = rest.Skip(1).FirstOrDefault(a => !a.StartsWith("--"))?.TrimEnd('/') + "/";
+        int h = rest.IndexOf("--hashes"), c = rest.IndexOf("--clips");
+        if (h < 0) { Console.Error.WriteLine("faces needs --hashes"); return 1; }
+        var pick = c >= 0 ? new System.Text.RegularExpressions.Regex(rest[c + 1]) : null;
+        var files = File.ReadLines(rest[h + 1]).Select(l => l.Substring(l.IndexOf(' ') + 1).Trim())
+            .Where(p => p.StartsWith(folder, StringComparison.Ordinal) && p.EndsWith(".tracm", StringComparison.Ordinal)).Distinct().OrderBy(p => p, StringComparer.Ordinal).ToList();
+        var uses = new SortedDictionary<string, int>(StringComparer.Ordinal);
+        foreach (var path in files)
+        {
+            string name = Path.GetFileNameWithoutExtension(path);
+            if (pick != null && !pick.IsMatch(name)) continue;
+            var data = archive.Read(path);
+            if (data == null) continue;
+            var anim = new AnimationData { Name = name };
+            try { TrinityCurveReader.Read(data, anim); } catch (Exception e) { Console.WriteLine($"{name}: unreadable ({e.Message})"); continue; }
+            var moved = anim.MorphTracks.Where(t => t.Weight != null && t.Weight.Values.Length > 0 && t.Weight.Values.Max() > 0.05f)
+                .Select(t => (shape: t.Shape, peak: t.Weight.Values.Max(), last: t.Weight.Times.Max())).ToList();
+            foreach (var m in moved) uses[m.shape] = uses.TryGetValue(m.shape, out int n) ? n + 1 : 1;
+            int frames = anim.MorphTracks.Where(t => t.Weight != null).Select(t => (int)t.Weight.Times.DefaultIfEmpty(0).Max()).DefaultIfEmpty(0).Max();
+            Console.WriteLine($"{name} ({frames} f): {string.Join(", ", moved.Select(m => $"{m.shape} {m.peak:0.##}"))}");
+        }
+        Console.WriteLine("\nshapes by clips using them:");
+        foreach (var kv in uses.OrderByDescending(kv => kv.Value)) Console.WriteLine($"  {kv.Value,4}  {kv.Key}");
         break;
     }
 

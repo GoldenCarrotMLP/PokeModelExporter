@@ -98,6 +98,30 @@ namespace PokeModelExporter.Ctr
             return anim;
         }
 
+        // How shut the eyes are over a trainer motion (PokeSim: the Z dances' faces). The player's face is a texture
+        // atlas of eye states (p1_face01_on.tga, from the bottom: open, half shut, shut), picked by the face material's
+        // V offset in steps of 0.25: the blink (a/1/7/4's sub-file 4) goes 0 -> 0.25 -> 0.5. The motion entry's sub-file
+        // with a UV track on <prefix>_face01 ("p1" the male player, "p2" the female) carries it. Per frame (30 fps,
+        // 0 .. the motion's frame count), 0 open .. 1 shut; null when the motion moves no eyes.
+        public static float[] EyesShut(byte[] entry, string prefix)
+        {
+            var subs = Container(entry) ?? new List<byte[]> { entry };
+            foreach (var bytes in subs)
+            {
+                if (!GfMotion.IsMotion(bytes)) continue;
+                GfMotion motion;
+                try { motion = GfMotion.Read(bytes); }
+                catch (Exception) { continue; }
+                var track = motion.Uvs.Find(u => u.Material == prefix + "_face01");
+                var v = track?.Channels[4];
+                if (v == null || !v.Animated) continue;
+                var shut = new float[Math.Max(1, motion.FrameCount + 1)];
+                for (int f = 0; f < shut.Length; f++) shut[f] = Math.Clamp(Eval(v, f, 0) / 0.5f, 0, 1);
+                return shut;
+            }
+            return null;
+        }
+
         static float Eval(GfMotion.Curve c, float frame, float fallback)
         {
             if (c == null || !c.Animated) return fallback;
