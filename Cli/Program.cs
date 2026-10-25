@@ -1269,8 +1269,10 @@ switch (rest[0])
         var watch = System.Diagnostics.Stopwatch.StartNew();
         var textureSources = new SortedDictionary<string, (string path, int cx, int cy)>(StringComparer.Ordinal);
         var primitiveShapes = new SortedDictionary<string, FxPrimitiveShape>(StringComparer.Ordinal);
-        // Terastallization last: textures and primitives keep the move files they were first analysed from.
-        foreach (var kv in byMove.OrderBy(k => k.Key == Tera ? 1 : 0).ThenBy(k => k.Key))
+        // Textures and primitives keep the file they were first analysed from (a name can be in several files, encoded a
+        // little differently): the moves first, then the battle's system effects (es, ee, etb, eb, the picnic: -1, -2...),
+        // Terastallization last.
+        foreach (var kv in byMove.OrderBy(k => k.Key == Tera ? 2 : k.Key > 0 ? 0 : 1).ThenBy(k => k.Key > 0 ? k.Key : -k.Key))
         {
             var timelines = new Dictionary<string, byte[]>();
             var scenes = new Dictionary<string, byte[]>();
