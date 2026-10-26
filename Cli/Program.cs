@@ -1000,6 +1000,28 @@ switch (rest[0])
         Console.WriteLine($"{glb.Length / 1024} KB -> {outFile}");
         break;
     }
+    case "roomparts": // roomparts <room model path> [--min-tris N]: each material's lumps with their bounds (choosing pieces to cut out)
+    {
+        int m = rest.IndexOf("--min-tris");
+        int minTris = m >= 0 ? int.Parse(rest[m + 1]) : 1;
+        foreach (var (material, lo, hi, n) in SvExporter.RoomParts(archive.Read, rest[1]))
+            if (n >= minTris)
+                Console.WriteLine($"{material}\t{n}\t{lo.X:0.00} {lo.Y:0.00} {lo.Z:0.00}\t{hi.X:0.00} {hi.Y:0.00} {hi.Z:0.00}\t{hi.X - lo.X:0.00} x {hi.Z - lo.Z:0.00} x {hi.Y - lo.Y:0.00}");
+        break;
+    }
+    case "roompiece": // roompiece <room model path> <material,material...> <minX minY minZ maxX maxY maxZ> [--turn degrees] --out <file.glb>: a piece cut out
+    {
+        int o = rest.IndexOf("--out");
+        var mats = new HashSet<string>(rest[2].Split(','));
+        var f = rest.Skip(3).Take(6).Select(v => float.Parse(v, System.Globalization.CultureInfo.InvariantCulture)).ToArray();
+        int tu = rest.IndexOf("--turn");
+        float turn = tu >= 0 ? float.Parse(rest[tu + 1], System.Globalization.CultureInfo.InvariantCulture) : 0;
+        var glb = SvExporter.ExportRoomPiece(archive.Read, rest[1], mats, new System.Numerics.Vector3(f[0], f[1], f[2]), new System.Numerics.Vector3(f[3], f[4], f[5]), turn);
+        if (glb == null) { Console.Error.WriteLine("nothing cut"); return 1; }
+        File.WriteAllBytes(Path.GetFullPath(rest[o + 1]), glb);
+        Console.WriteLine($"{glb.Length / 1024} KB");
+        break;
+    }
     case "sceneobjects": // sceneobjects <move number | .trsot path> [file suffix, default 0]: the move's scene object tree (.trsot): objects and their components
     {
         string path = rest[1].Contains('/') ? rest[1] : $"effect/battle_ew/ew{int.Parse(rest[1]):D4}/ew{int.Parse(rest[1]):D4}_{(rest.Count > 2 ? rest[2] : "0")}.trsot";

@@ -207,6 +207,137 @@ namespace PokeModelExporter.Scarlet
             }, null);
         }
 
+        // A piece cut out of a room modelled in one (the player's house field_graphic/common_model/a_t01_i01: its bed,
+        // kitchen, sofa... each with its own materials in one merged mesh): the triangles of the named materials whose
+        // middle is inside the box (the room model's metres), moved to stand on the origin (its footprint's middle at
+        // x = z = 0, its lowest point at y = 0) and turned by `turn` degrees round +y (right-handed: 90 takes +x to -z), so
+        // its back can be put at -z whichever wall it stood against. Null when the model isn't there or nothing is left.
+        public static byte[] ExportRoomPiece(Func<string, byte[]> readArchive, string modelPath, ICollection<string> materials,
+            System.Numerics.Vector3 boxMin, System.Numerics.Vector3 boxMax, float turn = 0)
+        {
+            int slash = modelPath.LastIndexOf('/');
+            string folder = modelPath.Substring(0, slash + 1), file = modelPath.Substring(slash + 1);
+            Func<string, byte[]> read = f => readArchive(folder + f);
+            if (read(file) == null) return null;
+            var model = TrinityModelReader.Read(file, read);
+            var meshes = new List<MeshData>();
+            foreach (var mesh in model.Meshes)
+            {
+                var map = new Dictionary<int, int>();
+                var subs = new List<SubMeshData>();
+                foreach (var sub in mesh.SubMeshes)
+                {
+                    if (!materials.Contains(sub.Material)) continue;
+                    var kept = new List<int>();
+                    for (int t = 0; t + 2 < sub.Indices.Length; t += 3)
+                    {
+                        var mid = (mesh.Positions[sub.Indices[t]] + mesh.Positions[sub.Indices[t + 1]] + mesh.Positions[sub.Indices[t + 2]]) / 3;
+                        if (mid.X < boxMin.X || mid.Y < boxMin.Y || mid.Z < boxMin.Z || mid.X > boxMax.X || mid.Y > boxMax.Y || mid.Z > boxMax.Z) continue;
+                        for (int k = 0; k < 3; k++)
+                        {
+                            int v = sub.Indices[t + k];
+                            if (!map.TryGetValue(v, out int nv)) map[v] = nv = map.Count;
+                            kept.Add(nv);
+                        }
+                    }
+                    if (kept.Count > 0) subs.Add(new SubMeshData { Material = sub.Material, Indices = kept.ToArray() });
+                }
+                if (subs.Count == 0) continue;
+                var order = new int[map.Count];
+                foreach (var kv in map) order[kv.Value] = kv.Key;
+                T[] Pick<T>(T[] all, int per = 1)
+                {
+                    if (all == null) return null;
+                    var r = new T[order.Length * per];
+                    for (int i = 0; i < order.Length; i++)
+                        for (int k = 0; k < per; k++) r[i * per + k] = all[order[i] * per + k];
+                    return r;
+                }
+                var cut = new MeshData
+                {
+                    Name = mesh.Name, Positions = Pick(mesh.Positions), Normals = Pick(mesh.Normals), Tangents = Pick(mesh.Tangents),
+                    Colors = Pick(mesh.Colors), SubMeshes = subs,
+                };
+                foreach (var uv in mesh.TexCoords) cut.TexCoords.Add(Pick(uv));
+                meshes.Add(cut);
+            }
+            if (meshes.Count == 0) return null;
+            var lo = new System.Numerics.Vector3(float.MaxValue);
+            var hi = new System.Numerics.Vector3(float.MinValue);
+            foreach (var m in meshes)
+                foreach (var v in m.Positions) { lo = System.Numerics.Vector3.Min(lo, v); hi = System.Numerics.Vector3.Max(hi, v); }
+            var shift = new System.Numerics.Vector3(-(lo.X + hi.X) / 2, -lo.Y, -(lo.Z + hi.Z) / 2);
+            var spin = System.Numerics.Matrix4x4.CreateRotationY(turn * (float)Math.PI / 180);
+            foreach (var m in meshes)
+            {
+                for (int i = 0; i < m.Positions.Length; i++) m.Positions[i] = System.Numerics.Vector3.Transform(m.Positions[i] + shift, spin);
+                if (m.Normals != null)
+                    for (int i = 0; i < m.Normals.Length; i++) m.Normals[i] = System.Numerics.Vector3.TransformNormal(m.Normals[i], spin);
+                if (m.Tangents != null)
+                    for (int i = 0; i < m.Tangents.Length; i++)
+                    {
+                        var t = System.Numerics.Vector3.TransformNormal(new System.Numerics.Vector3(m.Tangents[i].X, m.Tangents[i].Y, m.Tangents[i].Z), spin);
+                        m.Tangents[i] = new System.Numerics.Vector4(t, m.Tangents[i].W);
+                    }
+            }
+            model.Meshes = meshes;
+            model.Nodes.Clear();
+            model.Materials = model.Materials.FindAll(m => materials.Contains(m.Name));
+            var baked = SvMaterialBaker.Bake(model, read);
+            return GlbWriter.Write(model, baked.Textures, m => baked.Mappings[m.Name], null);
+        }
+
+        // A room model's parts for choosing pieces (pokemodelexporter roomparts): per material, each lump of triangles
+        // joined by shared corners, with its bounds (room model metres) and triangle count.
+        public static List<(string material, System.Numerics.Vector3 min, System.Numerics.Vector3 max, int triangles)> RoomParts(Func<string, byte[]> readArchive, string modelPath)
+        {
+            int slash = modelPath.LastIndexOf('/');
+            string folder = modelPath.Substring(0, slash + 1), file = modelPath.Substring(slash + 1);
+            Func<string, byte[]> read = f => readArchive(folder + f);
+            var model = TrinityModelReader.Read(file, read);
+            var parts = new List<(string, System.Numerics.Vector3, System.Numerics.Vector3, int)>();
+            foreach (var mesh in model.Meshes)
+                foreach (var sub in mesh.SubMeshes)
+                {
+                    // Lumps: triangles sharing a corner (positions to the millimetre), by union-find.
+                    var ids = new Dictionary<(long, long, long), int>();
+                    var up = new List<int>();
+                    int Id(int v)
+                    {
+                        var p = mesh.Positions[v];
+                        var k = ((long)Math.Round(p.X * 1000), (long)Math.Round(p.Y * 1000), (long)Math.Round(p.Z * 1000));
+                        if (!ids.TryGetValue(k, out int id)) { ids[k] = id = up.Count; up.Add(id); }
+                        return id;
+                    }
+                    int Find(int x) { while (up[x] != x) { up[x] = up[up[x]]; x = up[x]; } return x; }
+                    var tris = new List<int>();
+                    for (int t = 0; t + 2 < sub.Indices.Length; t += 3)
+                    {
+                        int a = Id(sub.Indices[t]), b = Id(sub.Indices[t + 1]), c = Id(sub.Indices[t + 2]);
+                        int ra = Find(a), rb = Find(b);
+                        if (ra != rb) up[rb] = ra;
+                        ra = Find(a); int rc = Find(c);
+                        if (ra != rc) up[rc] = ra;
+                        tris.Add(a);
+                    }
+                    var lumps = new Dictionary<int, (System.Numerics.Vector3 lo, System.Numerics.Vector3 hi, int n)>();
+                    for (int t = 0, i = 0; t + 2 < sub.Indices.Length; t += 3, i++)
+                    {
+                        int root = Find(tris[i]);
+                        var e = lumps.TryGetValue(root, out var x) ? x : (lo: new System.Numerics.Vector3(float.MaxValue), hi: new System.Numerics.Vector3(float.MinValue), n: 0);
+                        for (int k = 0; k < 3; k++)
+                        {
+                            var p = mesh.Positions[sub.Indices[t + k]];
+                            e.lo = System.Numerics.Vector3.Min(e.lo, p); e.hi = System.Numerics.Vector3.Max(e.hi, p);
+                        }
+                        e.n++;
+                        lumps[root] = e;
+                    }
+                    foreach (var l in lumps.Values) parts.Add((sub.Material, l.lo, l.hi, l.n));
+                }
+            return parts;
+        }
+
         // Effect models aren't skinned: each mesh rides the joint of the same name without "_shape" (Maya's
         // "shard1_shape" under "shard1", "pl_cup0_shape1" under "pl_cup01"), its vertices in model space at the bind pose. Bound as skinned meshes with weight 1 on that joint,
         // the clips move them (Earthquake's rock rises and breaks; before, only empty joints moved).

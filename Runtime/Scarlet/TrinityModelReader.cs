@@ -27,7 +27,9 @@ namespace PokeModelExporter.Scarlet
             var model = new ModelData { Name = Path.GetFileNameWithoutExtension(trmdlName) };
             var mdl = FbTable.Root(Require(read, trmdlName));
 
-            var skeleton = mdl.Table(2).String(0);
+            // Static props (field_graphic/...) have no skeleton table at all.
+            var skeletonRef = mdl.Table(2);
+            var skeleton = skeletonRef.IsNull ? null : skeletonRef.String(0);
             if (skeleton != null) ReadSkeleton(FbTable.Root(Require(read, skeleton)), model);
             if (locatorFiles != null)
                 foreach (var file in locatorFiles)
@@ -69,7 +71,8 @@ namespace PokeModelExporter.Scarlet
             var model = new ModelData { Name = Path.GetFileNameWithoutExtension(trmdlName) };
             var data = read(trmdlName);
             if (data == null) return model;
-            var skeleton = FbTable.Root(data).Table(2).String(0);
+            var skeletonRef = FbTable.Root(data).Table(2);
+            var skeleton = skeletonRef.IsNull ? null : skeletonRef.String(0);
             var skl = skeleton != null ? read(skeleton) : null;
             if (skl != null) ReadSkeleton(FbTable.Root(skl), model);
             return model;
