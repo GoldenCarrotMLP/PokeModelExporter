@@ -1272,6 +1272,15 @@ switch (rest[0])
         if (wantEvolution)
             byMove[Evolution] = File.ReadLines(rest[h + 1]).Select(l => l.Substring(l.IndexOf(' ') + 1))
                 .Where(p => p.StartsWith(EvolutionFolder + "/", StringComparison.Ordinal) && (p.EndsWith(".trtml", StringComparison.Ordinal) || p.EndsWith("_0.trsot", StringComparison.Ordinal))).ToList();
+        // A Tera Raid boss's actions (effect/battle_ej/ej_raid_*), as -3005 (raid.json), one variant each: powercharge (the
+        // shield going up round it: start, aura, shield, shield_02, trail, then raid_powercharge_loop on it), powercharge_success
+        // / _failue (the shield broken / holding), special01..03 (its actions; 03 "nullified the stat changes": a crystal
+        // burst, the foes' debuff). Each timeline's objects are in its own scene files (_0, or _start_0 + _loop_0); the
+        // shield's BG_OBJ_1 (the raid's background spot behind the boss) is the boss here.
+        const int Raid = -3005;
+        var raidNames = new[] { "powercharge", "powercharge_success", "powercharge_failue", "special01", "special02", "special03" };
+        if (only.Count == 0 || only.Contains(Raid))
+            byMove[Raid] = raidNames.Select(n => $"effect/battle_ej/ej_raid_{n}/ej_raid_{n}.trtml").ToList();
         bool za = SvCatalog.Open(archive.Read)?.Game == "legends-za";
         byte[] megaScene = null;
         if (za)
@@ -1333,6 +1342,18 @@ switch (rest[0])
             }
             Dictionary<string, IReadOnlyList<byte[]>> extraScenes = null;
             Dictionary<string, TrinityAnimationReader.CameraClip> cameras = null;
+            if (kv.Key == Raid)
+            {
+                extraScenes = new Dictionary<string, IReadOnlyList<byte[]>>();
+                foreach (var stem in timelines.Keys)
+                {
+                    string dir = $"effect/battle_ej/{stem}/";
+                    var sots = new[] { "", "_start", "_loop" }.Select(s => archive.Read($"{dir}{stem}{s}_0.trsot")).Where(b => b != null).ToList();
+                    if (sots.Count == 0) continue;
+                    scenes[stem] = sots[0];
+                    extraScenes[stem] = sots.Skip(1).ToList();
+                }
+            }
             if (kv.Key == Tera)
             {
                 var start = new List<byte[]>();
@@ -1344,17 +1365,18 @@ switch (rest[0])
                     if (archive.Read($"demo/ej/ej_transform01/ej_transform01_cam_c{c:D3}.trcma") is byte[] cma)
                         cameras[$"ej_transform01_cam_c{c:D3}"] = TrinityAnimationReader.ReadCamera(cma);
             }
-            string folder = kv.Key == Picnic ? "effect/appli/picnic" : kv.Key == Mega ? "ik_demo/ee/m_shinka" : kv.Key == Rogue ? "ik_effect/data/field/m_bousou/cmn" : kv.Key == Tera ? "demo/ej/ej_transform01"
+            string folder = kv.Key == Picnic ? "effect/appli/picnic" : kv.Key == Mega ? "ik_demo/ee/m_shinka" : kv.Key == Rogue ? "ik_effect/data/field/m_bousou/cmn" : kv.Key == Raid ? "effect/battle_ej/ej_raid" : kv.Key == Tera ? "demo/ej/ej_transform01"
                 : kv.Key <= -2100 ? $"effect/battle_eb/eb{-2100 - kv.Key:D3}" : kv.Key <= -2000 ? $"effect/battle_etb/etb{-2000 - kv.Key:D3}"
                 : kv.Key <= -1000 ? $"effect/battle_ee/ee{-1000 - kv.Key:D3}" : kv.Key < 0 ? $"effect/battle_es/es{-kv.Key:D3}" : null;
             string json = SvMoveFx.Export(kv.Key, timelines, scenes, archive.Read, out int count,
                 (path, name, cx, cy) => { if (!textureSources.ContainsKey(name)) textureSources[name] = (path, cx, cy); },
                 (path, name, prim) => { if (!primitiveShapes.ContainsKey(name)) { var shape = FxPrimitiveShape.Analyze(prim); shape.Source = path; primitiveShapes[name] = shape; } },
                 kv.Key == Evolution ? EvolutionFolder + "/sd9110_evolution" : folder, extraScenes, cameras, kv.Key == Picnic ? icons : kv.Key == BallThrow - 4 ? CatchSuccessExtras : null,
-                kv.Key == Evolution ? new Dictionary<string, string> { ["TARGET_1"] = "ATK", ["TARGET_2"] = "DEF" } : null,
+                kv.Key == Evolution ? new Dictionary<string, string> { ["TARGET_1"] = "ATK", ["TARGET_2"] = "DEF" }
+                    : kv.Key == Raid ? new Dictionary<string, string> { ["BG_OBJ_1"] = "ATK" } : null,
                 kv.Key == Evolution ? name => name.StartsWith("eff.", StringComparison.Ordinal) && archive.Read($"{EvolutionFolder}/sd9110_{name.Substring(4)}.ptcl") != null
                     ? $"{EvolutionFolder}/sd9110_{name.Substring(4)}.ptcl" : null : null);
-            string file = Path.Combine(outDir, kv.Key == Picnic ? "picnic.json" : kv.Key == Mega ? "mega.json" : kv.Key == Rogue ? "rogue.json" : kv.Key == Tera ? "tera.json" : kv.Key == Evolution ? "evolution.json"
+            string file = Path.Combine(outDir, kv.Key == Picnic ? "picnic.json" : kv.Key == Mega ? "mega.json" : kv.Key == Rogue ? "rogue.json" : kv.Key == Raid ? "raid.json" : kv.Key == Tera ? "tera.json" : kv.Key == Evolution ? "evolution.json"
                 : kv.Key <= -2100 ? $"eb{-2100 - kv.Key:D3}.json" : kv.Key <= -2000 ? $"etb{-2000 - kv.Key:D3}.json"
                 : kv.Key <= -1000 ? $"ee{-1000 - kv.Key:D3}.json" : kv.Key < 0 ? $"es{-kv.Key:D3}.json" : $"{kv.Key:D4}.json");
             File.WriteAllText(file, json);
