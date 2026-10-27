@@ -1262,6 +1262,7 @@ switch (rest[0])
         // scene file (m_shinka_cmn). The trainer's parts (m_shinka_pc, m_shinka_tr*) wait for trainer models. Only this from
         // Z-A: textures.json / primitives.json are merged into the existing ones.
         const int Mega = -3002;
+        const int Rogue = -3004;
         // Evolution (Scarlet/Violet's overworld scene, effect/demo/sd9110_evolution), as -3003 (evolution.json): before
         // (the glow and the charge), the change (outdoor / indoor), after_success, after_cancel; outdoor and indoor
         // variants with their own scene files. TARGET_1 is the old form (ATK), TARGET_2 the new (DEF).
@@ -1280,6 +1281,12 @@ switch (rest[0])
             byMove[Mega] = File.ReadLines(rest[h + 1]).Select(l => l.Substring(l.IndexOf(' ') + 1))
                 .Where(p => System.Text.RegularExpressions.Regex.IsMatch(p, @"^ik_demo/ee/m_shinka_(poke|pm[0-9a-z_]+)/m_shinka_[a-z0-9_]+\.trtml$")).ToList();
             Console.WriteLine($"Mega Evolution: {byMove[Mega].Count} timelines");
+            // A Rogue Mega's aura (world/ik_obj_template/effect/field/m_bousou), as -3004 (rogue.json): no timeline, the
+            // game's code attaches them; one effect per particle file: bousou_battle (the aura it wears in battle:
+            // sparks with trails and ribbons rising from a ring, a big glow), bousou_aura_heatup01 (enraged: faster,
+            // redder), bousou (the pillar of light marking where one waits).
+            byMove[Rogue] = new[] { "bousou_battle", "bousou_aura_heatup01", "bousou" }
+                .Select(n => $"world/ik_obj_template/effect/field/m_bousou/{n}_/{n}_0.trsot").ToList();
         }
         // The overworld's mood icons (effect/field/icon/ef_icon: ef_wakunasi_angry, _hunger, _exclamation, _question, _onpu,
         // _ase, _moyamoya, _silence and their _z variants, ef_symbol_*): the wild Pokemon's balloons, started from code;
@@ -1337,7 +1344,7 @@ switch (rest[0])
                     if (archive.Read($"demo/ej/ej_transform01/ej_transform01_cam_c{c:D3}.trcma") is byte[] cma)
                         cameras[$"ej_transform01_cam_c{c:D3}"] = TrinityAnimationReader.ReadCamera(cma);
             }
-            string folder = kv.Key == Picnic ? "effect/appli/picnic" : kv.Key == Mega ? "ik_demo/ee/m_shinka" : kv.Key == Tera ? "demo/ej/ej_transform01"
+            string folder = kv.Key == Picnic ? "effect/appli/picnic" : kv.Key == Mega ? "ik_demo/ee/m_shinka" : kv.Key == Rogue ? "ik_effect/data/field/m_bousou/cmn" : kv.Key == Tera ? "demo/ej/ej_transform01"
                 : kv.Key <= -2100 ? $"effect/battle_eb/eb{-2100 - kv.Key:D3}" : kv.Key <= -2000 ? $"effect/battle_etb/etb{-2000 - kv.Key:D3}"
                 : kv.Key <= -1000 ? $"effect/battle_ee/ee{-1000 - kv.Key:D3}" : kv.Key < 0 ? $"effect/battle_es/es{-kv.Key:D3}" : null;
             string json = SvMoveFx.Export(kv.Key, timelines, scenes, archive.Read, out int count,
@@ -1347,7 +1354,7 @@ switch (rest[0])
                 kv.Key == Evolution ? new Dictionary<string, string> { ["TARGET_1"] = "ATK", ["TARGET_2"] = "DEF" } : null,
                 kv.Key == Evolution ? name => name.StartsWith("eff.", StringComparison.Ordinal) && archive.Read($"{EvolutionFolder}/sd9110_{name.Substring(4)}.ptcl") != null
                     ? $"{EvolutionFolder}/sd9110_{name.Substring(4)}.ptcl" : null : null);
-            string file = Path.Combine(outDir, kv.Key == Picnic ? "picnic.json" : kv.Key == Mega ? "mega.json" : kv.Key == Tera ? "tera.json" : kv.Key == Evolution ? "evolution.json"
+            string file = Path.Combine(outDir, kv.Key == Picnic ? "picnic.json" : kv.Key == Mega ? "mega.json" : kv.Key == Rogue ? "rogue.json" : kv.Key == Tera ? "tera.json" : kv.Key == Evolution ? "evolution.json"
                 : kv.Key <= -2100 ? $"eb{-2100 - kv.Key:D3}.json" : kv.Key <= -2000 ? $"etb{-2000 - kv.Key:D3}.json"
                 : kv.Key <= -1000 ? $"ee{-1000 - kv.Key:D3}.json" : kv.Key < 0 ? $"es{-kv.Key:D3}.json" : $"{kv.Key:D4}.json");
             File.WriteAllText(file, json);

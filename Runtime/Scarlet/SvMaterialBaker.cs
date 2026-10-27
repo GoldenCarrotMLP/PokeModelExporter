@@ -133,6 +133,8 @@ namespace PokeModelExporter.Scarlet
             Add("SSSMaskMap");
             Add("DisplacementMap");
             Add("NormalMap1", normal: true);
+            // Legends Z-A's rim light mask (white where the rim, and a Mega's rainbow aura over it, may show).
+            Add("RimLightMaskMap");
             if (map.Unlit && layered) Add("BaseColorMap");
             // Flames mix their layers at runtime; eyes pick metallic / roughness per layer (sclera vs iris).
             if (layered && (map.Unlit || m.Shader == "EyeClearCoat")) Add("LayerMaskMap");
