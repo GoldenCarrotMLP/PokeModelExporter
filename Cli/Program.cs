@@ -1464,6 +1464,35 @@ switch (rest[0])
         break;
     }
 
+    case "textures": // textures <out dir> <.bntx path in the archive>...: each texture as PNG (reference only: lightmaps, light probes)
+    {
+        Directory.CreateDirectory(rest[1]);
+        foreach (var path in rest.Skip(2))
+        {
+            var bntx = archive.Read(path);
+            if (bntx == null) { Console.WriteLine($"{path}: missing"); continue; }
+            for (int i = 0; i < Bntx.Count(bntx); i++)
+            {
+                string name = Bntx.Name(bntx, i);
+                try
+                {
+                    var tex = Bntx.Read(bntx, i);
+                    File.WriteAllBytes(Path.Combine(rest[1], name + ".png"), Png.Encode(tex.Rgba, tex.Width, tex.Height));
+                    Console.WriteLine($"{name}: {tex.Width}x{tex.Height} format 0x{tex.Format:X4}");
+                }
+                catch (NotSupportedException)
+                {
+                    // BC6H (HDR): the raw blocks, "<w> <h>" in the name (decode with texture2ddecoder.decode_bc6).
+                    var blocks = Bntx.Bc6Blocks(bntx, i, out int w, out int h);
+                    File.WriteAllBytes(Path.Combine(rest[1], $"{name}.{w}x{h}.bc6"), blocks);
+                    Console.WriteLine($"{name}: {w}x{h} BC6H (raw blocks)");
+                }
+                catch (Exception e) { Console.WriteLine($"{name}: {e.Message}"); }
+            }
+        }
+        break;
+    }
+
     case "particles-survey": // particles-survey --hashes <hashes_inside_fd.txt>: parse every move particle file, count what they use
     {
         int h = rest.IndexOf("--hashes");

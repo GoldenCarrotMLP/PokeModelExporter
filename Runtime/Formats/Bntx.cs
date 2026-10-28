@@ -74,6 +74,23 @@ namespace PokeModelExporter.Formats
             return new Texture { Width = width, Height = height, Format = format, Rgba = rgba, Channels = channels };
         }
 
+        // A BC6H (HDR) texture's first image as linear 16-byte blocks, for tools that decode it (research: lightmaps,
+        // light probes; Read doesn't decode BC6H).
+        public static byte[] Bc6Blocks(byte[] file, int index, out int width, out int height)
+        {
+            long infoPtrs = BitConverter.ToInt64(file, 0x28);
+            int brti = (int)BitConverter.ToInt64(file, (int)infoPtrs + 8 * index);
+            int tileMode = BitConverter.ToUInt16(file, brti + 0x12);
+            uint format = BitConverter.ToUInt32(file, brti + 0x1C);
+            if ((format >> 8) != 0x1F) throw new NotSupportedException($"BNTX format layout 0x{format >> 8:X2}, not BC6H");
+            width = BitConverter.ToInt32(file, brti + 0x24);
+            height = BitConverter.ToInt32(file, brti + 0x28);
+            int blockHeightLog2 = BitConverter.ToInt32(file, brti + 0x34) & 7;
+            int data = (int)BitConverter.ToInt64(file, (int)BitConverter.ToInt64(file, brti + 0x70));
+            int wBlocks = (width + 3) / 4, hBlocks = (height + 3) / 4;
+            return tileMode == 1 ? Slice(file, data, wBlocks * hBlocks * 16) : Deswizzle(file, data, wBlocks, hBlocks, 16, 1 << blockHeightLog2);
+        }
+
         // The texture as a shader samples it: each output channel from its source (Channels). Effect masks rely on
         // it: BC4 masks are (R, R, R, R), two-channel BC5 ones (R, R, R, G) = a fill in red and the shape in green.
         public static byte[] Mapped(Texture t)
