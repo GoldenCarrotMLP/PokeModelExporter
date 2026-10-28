@@ -1253,6 +1253,13 @@ switch (rest[0])
         const int BallThrow = -1101; // effect/battle_ee/ee101: a thrown ball's effects, a scene without a timeline (so are the catch's, to -1106)
         // The success's particles its scene file doesn't name (the demo's code starts them): the stars when the ball lies on
         // the ground (above and under it) and the warp as the caught Pokemon's ball is sent away.
+        // A Tera Raid den (effect/battle_ej/ej_raid_bg00: no scene places them, the game's code builds the den), into
+        // raid.json as effects by their own names, per den variant NN 00-17: ej_raid_bgNN (the floor: a 45 m disc of
+        // scrolling jewel colours), _crack01 / _crack02 (cracks over it), _crystal01 (crystals), _crystal_stand01 (the
+        // crystal stand the boss is raised on). The den's dome (ej_raid_bgNN_dome02.trmdl, shader ProjField) is a model
+        // the client loads itself.
+        var RaidDen = Enumerable.Range(0, 18).SelectMany(n => new[] { "", "_crack01", "_crack02", "_crystal01", "_crystal_stand01" }
+            .Select(part => $"effect/battle_ej/ej_raid_bg00/ej_raid_bg{n:D2}{part}.ptcl")).ToArray();
         var CatchSuccessExtras = new[] { "effect/battle_ee/ee105/ee105_01_sucsess_ground_top.ptcl", "effect/battle_ee/ee105/ee105_01_sucsess_ground_under.ptcl", "effect/battle_ee/ee105/ee105_sucsess_warp.ptcl" };
         var teraTimeline = "demo/ej/ej_transform01/ej_transform01.trtml";
         bool wantTera = only.Count == 0 || only.Contains(Tera);
@@ -1371,7 +1378,7 @@ switch (rest[0])
             string json = SvMoveFx.Export(kv.Key, timelines, scenes, archive.Read, out int count,
                 (path, name, cx, cy) => { if (!textureSources.ContainsKey(name)) textureSources[name] = (path, cx, cy); },
                 (path, name, prim) => { if (!primitiveShapes.ContainsKey(name)) { var shape = FxPrimitiveShape.Analyze(prim); shape.Source = path; primitiveShapes[name] = shape; } },
-                kv.Key == Evolution ? EvolutionFolder + "/sd9110_evolution" : folder, extraScenes, cameras, kv.Key == Picnic ? icons : kv.Key == BallThrow - 4 ? CatchSuccessExtras : null,
+                kv.Key == Evolution ? EvolutionFolder + "/sd9110_evolution" : folder, extraScenes, cameras, kv.Key == Picnic ? icons : kv.Key == BallThrow - 4 ? CatchSuccessExtras : kv.Key == Raid ? RaidDen : null,
                 kv.Key == Evolution ? new Dictionary<string, string> { ["TARGET_1"] = "ATK", ["TARGET_2"] = "DEF" }
                     : kv.Key == Raid ? new Dictionary<string, string> { ["BG_OBJ_1"] = "ATK" } : null,
                 kv.Key == Evolution ? name => name.StartsWith("eff.", StringComparison.Ordinal) && archive.Read($"{EvolutionFolder}/sd9110_{name.Substring(4)}.ptcl") != null
@@ -1423,6 +1430,17 @@ switch (rest[0])
         tw.EndObject();
         File.WriteAllText(Path.Combine(outDir, "textures.json"), merge ? MergeJson(Path.Combine(outDir, "textures.json"), tw.ToString()) : tw.ToString());
         Console.WriteLine($"{analysed}/{textureSources.Count} texture shapes -> textures.json ({watch.ElapsedMilliseconds} ms)");
+
+        // The battle's own views while a move is chosen (world/data/battle/waitCamera: per battle kind, per the two
+        // Pokemon's size classes, the framing of the player's Pokemon with the foe and its trainer kept in the picture),
+        // decoded through its .bfbs schema as battlecamera.json (PokeSim's StagePresenter.Arena).
+        const string WaitCamera = "world/data/battle/waitCamera/waitCamera_array";
+        byte[] waitSchema = archive.Read(WaitCamera + ".bfbs"), waitData = archive.Read(WaitCamera + ".bin");
+        if (waitSchema != null && waitData != null)
+        {
+            File.WriteAllText(Path.Combine(outDir, "battlecamera.json"), BfbsSchema.ToJson(new BfbsSchema(waitSchema).Decode(waitData)));
+            Console.WriteLine("battle views -> battlecamera.json");
+        }
         break;
     }
 
