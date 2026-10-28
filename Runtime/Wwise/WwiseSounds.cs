@@ -17,6 +17,7 @@ namespace PokeModelExporter.Wwise
     // FORM00..), random/sequence containers (one child per play: footsteps, whooshes; pick it with variant) and layer
     // containers (every child at once). Sounds routed to the controller's vibration (Motion_Bus: HD rumble tracks, 4-channel
     // low tones layered under SV's Terastal sounds) are left out: through speakers they sound like a synth.
+    // Music switches on game states (the ambience beds) pick the decision-tree path matching the switches asked for.
     public sealed class WwiseSounds
     {
         readonly string _folder;
@@ -79,6 +80,116 @@ namespace PokeModelExporter.Wwise
             return result;
         }
 
+        // An event's whole tree as text, for research (which switches pick what, how many takes, the media sizes): every
+        // switch entry and container child, not just the ones Resolve would play. names: Wwise ID -> name (wwnames).
+        public List<string> Tree(string bankName, string eventName, IReadOnlyDictionary<uint, string> names = null)
+        {
+            var lines = new List<string>();
+            var bank = LoadBank(bankName);
+            if (bank == null || !bank.Objects.TryGetValue(Hash(eventName), out var ev) || ev.Type != 4) return lines;
+            string Name(uint id) => names != null && names.TryGetValue(id, out var n) ? n : id.ToString();
+            var r = new Reader(bank.Data, ev.Offset + 4);
+            int actions = (int)r.VarUInt();
+            for (int i = 0; i < actions; i++)
+            {
+                uint aid = r.U32();
+                if (!bank.Objects.TryGetValue(aid, out var action) || action.Type != 3) continue;
+                var a = new Reader(bank.Data, action.Offset + 4);
+                ushort type = a.U16();
+                uint target = a.U32();
+                lines.Add($"action 0x{type:X4} -> {Name(target)}");
+                if (type == 0x0403) TreeOf(bank, target, 1, lines, Name);
+            }
+            return lines;
+        }
+
+        void TreeOf(Bank bank, uint id, int depth, List<string> lines, Func<uint, string> name)
+        {
+            string pad = new string(' ', depth * 2);
+            if (depth > 10 || !bank.Objects.TryGetValue(id, out var obj)) { lines.Add($"{pad}{name(id)}: not in the bank"); return; }
+            if (obj.Type == 2)
+            {
+                var s = new Reader(bank.Data, obj.Offset + 4);
+                s.U32();
+                byte stream = s.U8();
+                uint media = s.U32();
+                var found = stream == 0 ? bank.Embedded(media) : FindStreamed(media) ?? bank.Embedded(media);
+                lines.Add($"{pad}sound {name(id)}: media {media} {(found == null ? "missing" : $"{found.Size} bytes in {found.Source}")}");
+            }
+            else if (obj.Type == 6 && SwitchList(bank, obj) is List<(uint Switch, uint[] Children)> entries)
+            {
+                lines.Add($"{pad}switch {name(id)} ({entries.Count} entries)");
+                foreach (var e in entries)
+                {
+                    lines.Add($"{pad}  [{name(e.Switch)}]");
+                    foreach (uint c in e.Children) TreeOf(bank, c, depth + 2, lines, name);
+                }
+            }
+            else if (obj.Type == 5 && Playlist(bank, obj) is uint[] takes)
+            {
+                lines.Add($"{pad}random/sequence {name(id)} ({takes.Length} takes)");
+                foreach (uint c in takes.Distinct()) TreeOf(bank, c, depth + 1, lines, name);
+            }
+            else if (obj.Type == 9 && LayerChildren(bank, obj, id) is uint[] layers)
+            {
+                lines.Add($"{pad}layers {name(id)} ({layers.Length})");
+                foreach (uint c in layers) TreeOf(bank, c, depth + 1, lines, name);
+            }
+            else if (obj.Type == 11)
+                foreach (var m in TrackSources(bank, obj)) lines.Add($"{pad}track {name(id)}: media {m.Id} {m.Size} bytes in {m.Source}");
+            else if (obj.Type == 12 && Decisions(bank, obj) is (uint[] Groups, List<(uint[] Path, uint Node)> Leaves) tree)
+            {
+                lines.Add($"{pad}music switch {name(id)} on {string.Join(", ", tree.Groups.Select(name))} ({tree.Leaves.Count} paths)");
+                foreach (var leaf in tree.Leaves)
+                {
+                    lines.Add($"{pad}  [{string.Join(" / ", leaf.Path.Select(k => k == 0 ? "*" : name(k)))}]");
+                    if (leaf.Node != 0) TreeOf(bank, leaf.Node, depth + 2, lines, name);
+                }
+            }
+            else if ((obj.Type == 10 || obj.Type == 12 || obj.Type == 13) && MusicChildren(bank, obj, id) is uint[] kids)
+            {
+                lines.Add($"{pad}{(obj.Type == 10 ? "segment" : obj.Type == 12 ? "music switch" : "music playlist")} {name(id)} ({kids.Length})");
+                foreach (uint c in kids) TreeOf(bank, c, depth + 1, lines, name);
+            }
+            else lines.Add($"{pad}type {obj.Type} {name(id)} ({obj.Length} bytes, not parsed)");
+        }
+
+        // A music switch container's decision tree (it ends the object): the tree depth D, D state/switch group IDs, D group
+        // types (bytes), the tree's size in bytes, a mode byte, then 12-byte nodes { key, children (index u16, count u16) or
+        // the audio node at the last level, weight u16, probability u16 }. Found by that exact fit. Every leaf with the key
+        // path to it (0 = any value).
+        static (uint[] Groups, List<(uint[] Path, uint Node)> Leaves)? Decisions(Bank bank, (byte Type, int Offset, int Length) obj)
+        {
+            var d = bank.Data;
+            int end = obj.Offset + obj.Length;
+            for (int p = obj.Offset + 4; p + 5 <= end; p++)
+            {
+                uint size = BitConverter.ToUInt32(d, p);
+                if (size == 0 || size % 12 != 0 || p + 5 + size != end) continue;
+                for (int depth = 1; depth <= 6; depth++)
+                {
+                    int at = p - 5 * depth - 4;
+                    if (at < obj.Offset + 4 || BitConverter.ToUInt32(d, at) != depth) continue;
+                    var groups = Enumerable.Range(0, depth).Select(i => BitConverter.ToUInt32(d, at + 4 + 4 * i)).ToArray();
+                    int nodes = p + 5, count = (int)(size / 12);
+                    var leaves = new List<(uint[], uint)>();
+                    void Walk(int i, int level, uint[] path)
+                    {
+                        if (i >= count || leaves.Count > 4096) return;
+                        int q = nodes + 12 * i;
+                        uint key = BitConverter.ToUInt32(d, q);
+                        var here = level < 0 ? path : path.Append(key).ToArray();
+                        if (level == depth - 1) { leaves.Add((here, BitConverter.ToUInt32(d, q + 4))); return; }
+                        int first = BitConverter.ToUInt16(d, q + 4), n = BitConverter.ToUInt16(d, q + 6);
+                        for (int c = 0; c < n; c++) Walk(first + c, level + 1, here);
+                    }
+                    Walk(0, -1, new uint[0]); // the root node's key is not a value
+                    return (groups, leaves);
+                }
+            }
+            return null;
+        }
+
         int _variant, _variants; // the Resolve in progress (callers hold one lock: GameSounds)
 
         void Collect(Bank bank, uint id, uint[] wanted, List<Media> result, int depth)
@@ -117,6 +228,15 @@ namespace PokeModelExporter.Wwise
             {
                 foreach (var media in TrackSources(bank, obj))
                     if (!result.Contains(media)) result.Add(media);
+            }
+            // A music switch on game states (SV's ambience beds: PLAY_ENV_BASE on SEABED_SWITCH / ENV_BASE / ENV_BASE_STAGE):
+            // the path whose every set value is wanted, the most matches first; none matching plays nothing (a path of
+            // only "any" plays when nothing else does).
+            else if (obj.Type == 12 && wanted.Length > 0 && Decisions(bank, obj) is (uint[] _, List<(uint[] Path, uint Node)> leaves))
+            {
+                var pick = leaves.Where(l => l.Node != 0 && l.Path.All(k => k == 0 || wanted.Contains(k)))
+                    .OrderByDescending(l => l.Path.Count(k => k != 0)).FirstOrDefault();
+                if (pick.Path != null && pick.Path.Any(k => k != 0)) Collect(bank, pick.Node, wanted, result, depth + 1);
             }
             else if ((obj.Type == 10 || obj.Type == 12 || obj.Type == 13) && MusicChildren(bank, obj, id) is uint[] kids && kids.Length > 0)
             {

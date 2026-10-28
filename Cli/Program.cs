@@ -70,6 +70,28 @@ if (rest[0] == "audio") // audio <bank> <EVENT_NAME>... --out <dir> [--switch IN
     return 0;
 }
 
+if (rest[0] == "audiotree") // audiotree <bank> <EVENT_NAME>... [--names <wwnames .txt>]: every switch entry, take and media an event can play
+{
+    string folder = PokeModelExporter.Wwise.WwiseSounds.FindFolder(gameFolder);
+    if (folder == null) { Console.Error.WriteLine($"No audio/wwise/bin/Switch/Init.bnk under {gameFolder}"); return 1; }
+    int nm = rest.IndexOf("--names");
+    var names = new Dictionary<uint, string>();
+    if (nm >= 0)
+        foreach (var line in File.ReadLines(rest[nm + 1]))
+        {
+            string n = line.Trim();
+            if (n.Length == 0 || n.StartsWith("#")) continue;
+            names[PokeModelExporter.Wwise.WwiseSounds.Hash(n)] = n;
+        }
+    var sounds = new PokeModelExporter.Wwise.WwiseSounds(folder);
+    for (int i = 2; i < rest.Count && !rest[i].StartsWith("--"); i++)
+    {
+        Console.WriteLine(rest[i]);
+        foreach (var line in sounds.Tree(rest[1], rest[i], names)) Console.WriteLine("  " + line);
+    }
+    return 0;
+}
+
 if (rest[0] == "ctrsound") // ctrsound <bcsar> <index or script id>... --out <dir>: Ultra Sun/Moon sounds rendered to WAV
 {
     var sar = new PokeModelExporter.Ctr.CtrSoundArchive(rest[1]);
