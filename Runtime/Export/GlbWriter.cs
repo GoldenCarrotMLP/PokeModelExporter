@@ -79,6 +79,7 @@ namespace PokeModelExporter.Export
                     parts.Add("\"emissiveFactor\":[1,1,1]");
                 }
                 if (map.AlphaBlend) parts.Add("\"alphaMode\":\"BLEND\"");
+                else if (map.AlphaCutoff > 0) { parts.Add("\"alphaMode\":\"MASK\""); parts.Add($"\"alphaCutoff\":{F(map.AlphaCutoff)}"); }
                 if (map.Unlit) { parts.Add("\"extensions\":{\"KHR_materials_unlit\":{}}"); usesUnlit = true; }
                 if (map.DoubleSided) parts.Add("\"doubleSided\":true");
                 parts.Add($"\"extras\":{MaterialExtras(mat, map.Maps, imageIndex)}");
@@ -477,6 +478,7 @@ namespace PokeModelExporter.Export
         public float Roughness = 0.8f, Metallic;
         public float[] BaseColorFactor; // rgba; null = white (the texture alone)
         public bool AlphaBlend, DoubleSided, Unlit;
+        public float AlphaCutoff; // > 0: cut out below it (glTF MASK)
         // Game texture slots without a glTF role that engine shaders use (SSSMaskMap, LayerMaskMap, raw BaseColorMap,
         // DisplacementMap, NormalMap1) -> texture name; written as plain (linear) textures, listed in extras.maps.
         public readonly Dictionary<string, string> Maps = new Dictionary<string, string>();

@@ -156,7 +156,8 @@ namespace PokeModelExporter.Scarlet
         // effect/battle_ew/ew0089/ew0089_rock/ew0089_rock.trmdl) as a GLB: meshes, skeleton, baked textures and every
         // clip its animation resource lists (an effect model usually has one, named like the model: "default").
         // readArchive: any archive file by path. Null when the model isn't there.
-        public static byte[] ExportEffectModel(Func<string, byte[]> readArchive, string modelPath)
+        // props: a field prop (PokeSim's HouseProps) rather than a move's effect: only what the game draws (Props).
+        public static byte[] ExportEffectModel(Func<string, byte[]> readArchive, string modelPath, bool props = false)
         {
             int slash = modelPath.LastIndexOf('/');
             string folder = modelPath.Substring(0, slash + 1), file = modelPath.Substring(slash + 1);
@@ -195,6 +196,7 @@ namespace PokeModelExporter.Scarlet
                 model.Animations.Add(anim);
             }
             BindRigidMeshes(model);
+            if (props) Props(model);
             var baked = SvMaterialBaker.Bake(model, read);
             // Effect materials without a colour texture (Guillotine's claws, Bind's rings: the game feeds them from
             // elsewhere) show their BaseColor instead of plain white.
@@ -203,8 +205,36 @@ namespace PokeModelExporter.Scarlet
                 var map = baked.Mappings[m.Name];
                 bool textured = map.BaseColorTexture != null && baked.Textures.ContainsKey(map.BaseColorTexture);
                 if (!textured && m.Colors.TryGetValue("BaseColor", out var c)) map.BaseColorFactor = new[] { c.X, c.Y, c.Z, 1f };
+                if (props) PropAlpha(m, map);
                 return map;
             }, null);
+        }
+
+        // What a field prop draws, by the game's own material data rather than names (owner 2026-10-29: the props kept
+        // z-fighting with "their collision box/shadow box"; each fix had matched one more name): parts whose material uses
+        // the Shadow shader (a rough copy only the shadow map draws), the Decal shader (a dark patch the game lays on the
+        // ground under it) or is named as collision are left out; empty meshes go with them.
+        static readonly string[] Hidden = { "Shadow", "Decal" };
+        static void Props(ModelData model)
+        {
+            var hidden = new HashSet<string>();
+            foreach (var m in model.Materials)
+                if (m.Shader != null && Array.IndexOf(Hidden, m.Shader) >= 0 || m.Name.EndsWith("_collision", StringComparison.OrdinalIgnoreCase)
+                    || m.Name.IndexOf("collision_shape", StringComparison.OrdinalIgnoreCase) >= 0)
+                    hidden.Add(m.Name);
+            if (hidden.Count == 0) return;
+            foreach (var mesh in model.Meshes) mesh.SubMeshes.RemoveAll(sub => hidden.Contains(sub.Material));
+            model.Meshes.RemoveAll(mesh => mesh.SubMeshes.Count == 0);
+        }
+
+        // A prop's see-through layers as the game blends them (its alpha types are Blend, BlendPreMultiAlpha, Add and
+        // Mul; none is called "Transparent", which is all the default looked for), cut-out ones (EnableAlphaTest) as glTF
+        // masks: drawn solid, an overlay layer fought with the surface under it and leaf cards showed as squares.
+        static void PropAlpha(MaterialData m, MaterialMapping map)
+        {
+            string type = m.AlphaType ?? "";
+            if (type == "Blend" || type == "BlendPreMultiAlpha" || type == "Add" || type == "Mul" || m.Shader == "Transparent") map.AlphaBlend = true;
+            else if (m.ShaderOptions.TryGetValue("EnableAlphaTest", out var test) && test == "True") map.AlphaCutoff = 0.5f;
         }
 
         // A piece cut out of a room modelled in one (the player's house field_graphic/common_model/a_t01_i01: its bed,
@@ -283,8 +313,10 @@ namespace PokeModelExporter.Scarlet
             model.Meshes = meshes;
             model.Nodes.Clear();
             model.Materials = model.Materials.FindAll(m => materials.Contains(m.Name));
+            Props(model);
+            if (model.Meshes.Count == 0) return null;
             var baked = SvMaterialBaker.Bake(model, read);
-            return GlbWriter.Write(model, baked.Textures, m => baked.Mappings[m.Name], null);
+            return GlbWriter.Write(model, baked.Textures, m => { var map = baked.Mappings[m.Name]; PropAlpha(m, map); return map; }, null);
         }
 
         // A room model's parts for choosing pieces (pokemodelexporter roomparts): per material, each lump of triangles
