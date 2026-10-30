@@ -648,6 +648,10 @@ namespace PokeModelExporter.Scarlet
         public float MinSize, MaxSize;
         public float InframeVerticalRotYOrigin, InframeBottomYOffset, InframeCenterYOffset;
         public float InframeLeftRotation, InframeRightRotation;
+        // How high the model hovers over the ground (fields 10-12, unnamed in PokeDocs' schema, "mons that fly above the
+        // ground"): field 12 on the floating and flying Pokemon (Frosmoth 0.75, Magnemite 0.7), field 11 how deep a
+        // swimmer sits in the water (negative), field 10 a second water offset. Model metres; 0 when absent.
+        public float FloatHeight, SwimDepth, WaterOffset;
 
         public string SizeName => SizeIndex >= 0 && SizeIndex < SizeNames.Length ? SizeNames[SizeIndex] : "M";
 
@@ -661,6 +665,7 @@ namespace PokeModelExporter.Scarlet
                 MinSize = t.F32(1), MaxSize = t.F32(2),
                 InframeVerticalRotYOrigin = t.F32(4), InframeBottomYOffset = t.F32(5), InframeCenterYOffset = t.F32(6),
                 InframeLeftRotation = t.F32(7), InframeRightRotation = t.F32(8),
+                WaterOffset = t.F32(10), SwimDepth = t.F32(11), FloatHeight = t.F32(12),
             };
         }
     }
@@ -746,6 +751,9 @@ namespace PokeModelExporter.Scarlet
             w.Name("species").Value(entry.Species).Name("form").Value(entry.Form).Name("gender").Value(entry.Gender);
             w.Name("shiny").Value(shiny);
             w.Name("size").Value(config?.SizeName ?? "M");
+            // How high it hovers over the ground and how deep it swims (model metres; left out when 0).
+            if (config != null && config.FloatHeight > 0) w.Name("float").Value(config.FloatHeight);
+            if (config != null && config.SwimDepth != 0) w.Name("swim").Value(config.SwimDepth);
             w.Name("locators").BeginArray();
             foreach (var n in model.Nodes) if (n.IsLocator) w.Value(n.Name);
             w.EndArray();
