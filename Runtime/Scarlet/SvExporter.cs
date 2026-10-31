@@ -110,7 +110,7 @@ namespace PokeModelExporter.Scarlet
             try { controller = SvAnimController.Read(model.Name, read); }
             catch (Exception) { controller = null; } // an unexpected controller layout: the model still exports
             // The face clips (eye01, mouth01) always come along: the face layer plays them over any body clip.
-            if (options.Animations) LoadClips(model, read, options.Clips, options.MainClipSetOnly, controller?.Faces.Select(f => f.Clip));
+            if (options.Animations) LoadClips(model, read, options.Clips, options.MainClipSetOnly, controller?.Faces.Select(f => f.Clip), controller?.ClipAliases);
             if (options.Animations && options.Donor != null) BorrowClips(model, options.Donor, options.MainClipSetOnly);
             if (options.Donor?.Controller?.LookAt != null && controller?.LookAt != null) InheritLookAt(controller.LookAt, options.Donor.Controller.LookAt);
             if (options.Animations && options.MainClipSetOnly && model.Animations.Count > 0) KeepLocatorSet(model, model.Animations[0].Name[0]);
@@ -443,7 +443,10 @@ namespace PokeModelExporter.Scarlet
         // Every skeletal clip listed in the model's animation resource file, with its notifies (.traef) and
         // material/visibility/blend-shape tracks (.tracm). Meshes the battle idle hides are hidden by default.
         // always: clips kept whatever the set and filter say (the controller's face clips).
-        public static void LoadClips(ModelData model, Func<string, byte[]> read, Func<string, bool> filter = null, bool mainSetOnly = false, IEnumerable<string> always = null)
+        // aliases: the controller's ClipAliases (a state that plays another clip than the one it is named after: that
+        // clip's data is loaded under the state's name). A clip made for another skeleton (Misfit) is left out.
+        public static void LoadClips(ModelData model, Func<string, byte[]> read, Func<string, bool> filter = null, bool mainSetOnly = false, IEnumerable<string> always = null,
+            IReadOnlyDictionary<string, string> aliases = null)
         {
             var tracr = read(model.Name + "_base.tracr");
             if (tracr == null) return;
@@ -451,15 +454,19 @@ namespace PokeModelExporter.Scarlet
             string ClipName(string file) => Path.GetFileNameWithoutExtension(file).Substring(model.Name.Length + 1); // 00001_battlewait01_loop
             char? set = mainSetOnly ? MainClipSet(files.Select(ClipName)) : null;
             var forced = new HashSet<string>(always ?? Enumerable.Empty<string>());
-            foreach (var file in files)
+            foreach (var listed in files)
             {
-                string clip = ClipName(file);
+                string clip = ClipName(listed);
                 bool force = forced.Contains(clip);
                 if (!force && set != null && clip[0] != set) continue;
                 if (!force && filter != null && !filter(clip)) continue;
+                string file = listed;
+                if (aliases != null && aliases.TryGetValue(clip, out string playedClip) && files.FirstOrDefault(f => ClipName(f) == playedClip) is string played)
+                    file = played;
                 var data = read(file);
                 if (data == null) continue;
                 var anim = TrinityAnimationReader.Read(data, clip);
+                if (Misfit(model, anim) != null) continue;
                 var traef = read(Path.ChangeExtension(file, ".traef"));
                 if (traef != null) anim.Events = TrinityAnimationReader.ReadEvents(traef);
                 var tracm = read(Path.ChangeExtension(file, ".tracm"));
@@ -473,7 +480,21 @@ namespace PokeModelExporter.Scarlet
                     foreach (var mesh in model.Meshes.Where(m => m.Name == v.Mesh)) mesh.Hidden = true;
         }
 
-        // The part of a clip name after its number: 00000_defaultwait01_loop -> defaultwait01_loop (the games number the
+        // Why a clip doesn't fit this skeleton, or null when it does. Clips are read onto the skeleton by bone name, so
+        // one made for another rig still "applies": Slakoth's resource lists pm0297_00_00_00001_battlewait01_loop (spine,
+        // hair_01, feeler_c_02... a waist 1 m up where Slakoth's is 0.29 m), whose offsets stretched its limbs to several
+        // times their length and pulled the head off. Such a clip names bones this skeleton doesn't have: over 40% of a
+        // clip's tracks (of 10 or more; small face clips can key eyelid bones a form lacks) is another rig, as for
+        // BorrowClips. Over the whole catalog (clipfit) only that one clip trips it. Comparing keyed offsets with the
+        // skeleton's instead flags clips that legitimately move bones far (Rotom's forms, rangeattack02 loops).
+        public static string Misfit(ModelData model, AnimationData anim)
+        {
+            var bones = new HashSet<string>(model.Nodes.Where(n => n.Name != null).Select(n => n.Name));
+            int total = anim.Tracks.Count, missing = anim.Tracks.Count(t => !bones.Contains(t.Bone ?? ""));
+            return total >= 10 && missing > total * 0.4f ? $"{missing} of {total} bones not in the skeleton" : null;
+        }
+
+        // The part of a clip name after its number:00000_defaultwait01_loop -> defaultwait01_loop (the games number the
         // same clips alike, but the part is what the slots and chains go by).
         public static string ClipPart(string name) => name.Length > 6 && char.IsDigit(name[0]) && name[5] == '_' ? name.Substring(6) : name;
 

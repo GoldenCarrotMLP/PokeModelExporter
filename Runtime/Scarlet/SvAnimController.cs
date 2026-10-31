@@ -58,7 +58,7 @@ namespace PokeModelExporter.Scarlet
             var c = new SvAnimController();
             // Each file on its own: an unexpected layout (another game's version) loses that part, not the rest.
             var tracs = read(modelName + "_base.tracs");
-            if (tracs != null) try { c.ReadStates(tracs); } catch (Exception) { c.Faces.Clear(); c.ClipFlags.Clear(); c.Chains.Clear(); c.Body = null; }
+            if (tracs != null) try { c.ReadStates(tracs); } catch (Exception) { c.Faces.Clear(); c.ClipFlags.Clear(); c.Chains.Clear(); c.ClipAliases.Clear(); c.Body = null; }
             var tralk = read(modelName + "_base.tralk");
             if (tralk != null) try { c.ReadLookAt(tralk); } catch (Exception) { c.LookAt = null; }
             return c;
@@ -178,6 +178,7 @@ namespace PokeModelExporter.Scarlet
                 {
                     Body = root;
                     BuildChains(root);
+                    BuildClipAliases(root);
                     foreach (var s in root.All())
                     {
                         if (string.IsNullOrEmpty(s.Clip)) continue;
@@ -190,6 +191,25 @@ namespace PokeModelExporter.Scarlet
         }
 
         static readonly Regex Numbered = new Regex(@"^\d+_");
+        static readonly Regex ClipNamed = new Regex(@"^\d{5}_[a-z0-9_]+$");
+
+        // A body state named after a clip that plays another clip, when no state plays the named one: the game never
+        // shows the file of that name, it shows the other clip (Slakoth's 00001_battlewait01_loop state plays
+        // 00000_defaultwait01_loop; its resource still lists a battle idle filed under another model's name,
+        // pm0297_00_00_00001_battlewait01_loop, made for another rig). State (clip) name -> the clip it plays.
+        public readonly Dictionary<string, string> ClipAliases = new Dictionary<string, string>();
+
+        void BuildClipAliases(State root)
+        {
+            var played = new HashSet<string>(root.All().Where(s => !string.IsNullOrEmpty(s.Clip)).Select(s => s.Clip));
+            foreach (var s in root.All())
+            {
+                if (string.IsNullOrEmpty(s.Clip) || s.Path.Length == 0) continue;
+                string leaf = s.Leaf;
+                if (leaf == s.Clip || !ClipNamed.IsMatch(leaf) || !ClipNamed.IsMatch(s.Clip) || played.Contains(leaf)) continue;
+                if (!ClipAliases.ContainsKey(leaf)) ClipAliases[leaf] = s.Clip;
+            }
+        }
 
         // "0_eye01_close_stop" -> "close_stop" for layer eye01 (Legends Z-A writes "#0_eye01#_close_stop").
         static string Short(State s, string layer)

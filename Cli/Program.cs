@@ -1052,6 +1052,50 @@ switch (rest[0])
         foreach (var line in SvSceneObjects.Describe(data)) Console.WriteLine(line);
         break;
     }
+    case "clipfit": // clipfit [national dex...]: over the catalog (or these species), the clips the converter swaps for the one their state plays (aliases) or leaves out as made for another skeleton (SvExporter.Misfit)
+    {
+        var catalog = SvCatalog.Open(archive.Read);
+        var personal = new SvPersonal(archive.Read(SvPersonal.Path), SvPersonal.FieldShift(catalog?.Game));
+        var only = new HashSet<int>(rest.Skip(1).Where(a => int.TryParse(a, out _)).Select(a => personal.CatalogSpecies(int.Parse(a), 0)));
+        int models = 0, clips = 0, aliased = 0, misfits = 0;
+        foreach (var entry in catalog.Entries.GroupBy(e => e.ModelPath).Select(g => g.First()))
+        {
+            if (only.Count > 0 && !only.Contains(entry.Species)) continue;
+            string folder = entry.DataRoot + entry.Folder;
+            Func<string, byte[]> read = file => archive.Read(folder + file);
+            ModelData model;
+            try { model = TrinityModelReader.ReadSkeletonOnly(entry.ModelPath.Substring(entry.Folder.Length), read); }
+            catch (Exception) { continue; }
+            if (model == null) continue;
+            var tracr = read(model.Name + "_base.tracr");
+            if (tracr == null) continue;
+            models++;
+            SvAnimController controller = null;
+            try { controller = SvAnimController.Read(model.Name, read); } catch (Exception) { }
+            var files = TrinityAnimationReader.ClipNamesFromResource(tracr);
+            foreach (var file in files)
+            {
+                string clip = Path.GetFileNameWithoutExtension(file).Substring(model.Name.Length + 1);
+                if (controller != null && controller.ClipAliases.TryGetValue(clip, out string played))
+                {
+                    aliased++;
+                    Console.WriteLine($"{folder}  {clip}: its state plays {played}{(files.Any(f => f.EndsWith(played + ".tranm")) ? "" : " (not listed: kept)")}; listed file {file}");
+                }
+                var data = read(file);
+                if (data == null) continue;
+                clips++;
+                AnimationData anim;
+                try { anim = TrinityAnimationReader.Read(data, clip); } catch (Exception) { continue; }
+                string why = SvExporter.Misfit(model, anim);
+                if (why == null) continue;
+                misfits++;
+                Console.WriteLine($"{folder}  {file}: misfit, {why}");
+            }
+        }
+        Console.WriteLine($"{models} models, {clips} clips: {aliased} aliased, {misfits} misfits");
+        break;
+    }
+
     case "tranm": // tranm <clip path in the archive>...: a skeletal clip's tracks (frames, per bone the keyed channels and their ranges)
     {
         foreach (var path in rest.Skip(1).Where(a => !a.StartsWith("--")))
