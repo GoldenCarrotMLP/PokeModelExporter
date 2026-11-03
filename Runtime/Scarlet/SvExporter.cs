@@ -43,6 +43,7 @@ namespace PokeModelExporter.Scarlet
             public bool ExtraImages = true;
             public Func<string, bool> Clips; // which clips to keep (name without the model prefix, e.g. 00001_battlewait01_loop); null = all
             public bool MainClipSetOnly;     // only the main clip set (see MainClipSet)
+            public bool OtherSetsMoving;     // with MainClipSetOnly: also the other sets' moving-about clips (OtherSetClip)
             public IEnumerable<string> FolderFiles; // every file of the model folder, if known (hash list)
             public Donor Donor;              // another model of the species to inherit from (a Mega's base form), see BorrowClips
         }
@@ -110,10 +111,11 @@ namespace PokeModelExporter.Scarlet
             try { controller = SvAnimController.Read(model.Name, read); }
             catch (Exception) { controller = null; } // an unexpected controller layout: the model still exports
             // The face clips (eye01, mouth01) always come along: the face layer plays them over any body clip.
-            if (options.Animations) LoadClips(model, read, options.Clips, options.MainClipSetOnly, controller?.Faces.Select(f => f.Clip), controller?.ClipAliases);
+            if (options.Animations) LoadClips(model, read, options.Clips, options.MainClipSetOnly, controller?.Faces.Select(f => f.Clip), controller?.ClipAliases, options.OtherSetsMoving);
             if (options.Animations && options.Donor != null) BorrowClips(model, options.Donor, options.MainClipSetOnly);
             if (options.Donor?.Controller?.LookAt != null && controller?.LookAt != null) InheritLookAt(controller.LookAt, options.Donor.Controller.LookAt);
-            if (options.Animations && options.MainClipSetOnly && model.Animations.Count > 0) KeepLocatorSet(model, model.Animations[0].Name[0]);
+            if (options.Animations && options.MainClipSetOnly && model.Animations.Count > 0 && MainClipSet(model.Animations.Select(a => a.Name)) is char mainSet)
+                KeepLocatorSet(model, mainSet);
             ScaleCompensation.Apply(model); // after the node list is final (locators are expected last before this)
 
             var baked = SvMaterialBaker.Bake(model, read, engineMaps: true);
@@ -197,7 +199,7 @@ namespace PokeModelExporter.Scarlet
             }
             BindRigidMeshes(model);
             if (props) Props(model);
-            var baked = SvMaterialBaker.Bake(model, read);
+            var baked = SvMaterialBaker.Bake(model, read, baseSize: props);
             // Effect materials without a colour texture (Guillotine's claws, Bind's rings: the game feeds them from
             // elsewhere) show their BaseColor instead of plain white.
             return GlbWriter.Write(model, baked.Textures, m =>
@@ -315,7 +317,7 @@ namespace PokeModelExporter.Scarlet
             model.Materials = model.Materials.FindAll(m => materials.Contains(m.Name));
             Props(model);
             if (model.Meshes.Count == 0) return null;
-            var baked = SvMaterialBaker.Bake(model, read);
+            var baked = SvMaterialBaker.Bake(model, read, baseSize: true);
             return GlbWriter.Write(model, baked.Textures, m => { var map = baked.Mappings[m.Name]; PropAlpha(m, map); return map; }, null);
         }
 
@@ -445,8 +447,10 @@ namespace PokeModelExporter.Scarlet
         // always: clips kept whatever the set and filter say (the controller's face clips).
         // aliases: the controller's ClipAliases (a state that plays another clip than the one it is named after: that
         // clip's data is loaded under the state's name). A clip made for another skeleton (Misfit) is left out.
+        // otherSetsMoving (with mainSetOnly): the other sets' clips for moving about too (OtherSetClip: a swimmer's or a
+        // flyer's wait, walk, run, turns, take-off and landing), not their battle clips.
         public static void LoadClips(ModelData model, Func<string, byte[]> read, Func<string, bool> filter = null, bool mainSetOnly = false, IEnumerable<string> always = null,
-            IReadOnlyDictionary<string, string> aliases = null)
+            IReadOnlyDictionary<string, string> aliases = null, bool otherSetsMoving = false)
         {
             var tracr = read(model.Name + "_base.tracr");
             if (tracr == null) return;
@@ -458,7 +462,7 @@ namespace PokeModelExporter.Scarlet
             {
                 string clip = ClipName(listed);
                 bool force = forced.Contains(clip);
-                if (!force && set != null && clip[0] != set) continue;
+                if (!force && set != null && clip[0] != set && !(otherSetsMoving && char.IsDigit(clip[0]) && OtherSetClip(clip))) continue;
                 if (!force && filter != null && !filter(clip)) continue;
                 string file = listed;
                 if (aliases != null && aliases.TryGetValue(clip, out string playedClip) && files.FirstOrDefault(f => ClipName(f) == playedClip) is string played)
@@ -631,6 +635,13 @@ namespace PokeModelExporter.Scarlet
             foreach (var n in kept) if (n.Parent >= 0) n.Parent = map[n.Parent];
             model.Nodes = kept;
         }
+
+        // The clips of a set other than the main one worth having (owner 2026-11-02: Buizel swimming in the world, the
+        // flyers flying): moving about in the water or the air (wait, idles, walk, run, turns), getting in and out of it
+        // (jumps, landing, stepping out), noticing someone. Not the battle's (the battle plays the main set).
+        static readonly string[] OtherSetParts = { "defaultwait", "defaultidle", "walk0", "run0", "turn_", "jumpup", "jumpdown", "land0", "stepout", "notice", "takeoff", "fly", "glide", "dive", "swim" };
+
+        public static bool OtherSetClip(string clip) => OtherSetParts.Any(p => clip.Contains(p));
 
         // Clips come in sets by their number's first digit: 0xxxx standing, 1xxxx swimming, 2xxxx floating
         // or flying. Many Pokemon have only one (Gyarados 1, Venomoth and Magnemite 2), some several:

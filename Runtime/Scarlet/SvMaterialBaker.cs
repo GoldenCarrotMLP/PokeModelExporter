@@ -32,7 +32,11 @@ namespace PokeModelExporter.Scarlet
         // normal, displacement, the layer mask of eyes and Unlit layered materials, and the latter's (flames) base
         // map, so their HDR layer colours can be mixed at runtime instead of tone-mapped into the baked texture.
         // unfoldAll: also every other texture slot (rim, specular, layer masks...) as the game samples it, for reference.
-        public static Result Bake(ModelData model, Func<string, byte[]> readTexture, bool engineMaps = false, bool unfoldAll = false)
+        // baseSize: a layered material baked at its base map's size when that's bigger than its layer mask (field props:
+        // the trees' and plants' Tree materials point at the shared 2x2 glb_share_tex/texture_layer_msk, which baked the
+        // banana's, plumeria's, cycad's, palm's and bamboo's leaf cards into 2x2 textures, their alpha test cutting the
+        // leaves away). Off for Pokemon and move effects, whose output stays as reviewed.
+        public static Result Bake(ModelData model, Func<string, byte[]> readTexture, bool engineMaps = false, bool unfoldAll = false, bool baseSize = false)
         {
             var result = new Result();
             var decoded = new Dictionary<string, Bntx.Texture>();
@@ -79,14 +83,16 @@ namespace PokeModelExporter.Scarlet
                     Bntx.Texture highlight = null;
                     if (HasHighlight(mat) && maskFile.Contains("_lym"))
                         highlight = View("LayerMaskMap", maskFile.Replace("_lym", "_msk"), false).Tex;
-                    var (color, emission) = BakeLayers(mat, baseTex, mask, highlight);
+                    int w = mask.Width, h = mask.Height;
+                    if (baseSize && baseTex != null && baseTex.Width * baseTex.Height > w * h) { w = baseTex.Width; h = baseTex.Height; }
+                    var (color, emission) = BakeLayers(mat, baseTex, mask, highlight, w, h);
                     string colorName = mat.Name + "_color.png";
-                    result.Textures[colorName] = Png.Encode(color, mask.Width, mask.Height);
+                    result.Textures[colorName] = Png.Encode(color, w, h);
                     map.BaseColorTexture = colorName;
                     if (emission != null)
                     {
                         string emissionName = mat.Name + "_emission.png";
-                        result.Textures[emissionName] = Png.Encode(emission, mask.Width, mask.Height);
+                        result.Textures[emissionName] = Png.Encode(emission, w, h);
                         map.EmissiveTexture = emissionName;
                     }
                 }
@@ -268,13 +274,14 @@ namespace PokeModelExporter.Scarlet
         // mask channel i (R,G,B,A) scaled by LayerMaskScale_i; layer 5 (highlight) uses its own mask.
         // Emission: sum of mask_i * EmissionColorLayer_i * EmissionIntensityLayer_i.
         // HDR colors (flames go up to 4.0) are tone-mapped so their excess brightness reads as glow.
-        static (byte[] color, byte[] emission) BakeLayers(MaterialData m, Bntx.Texture baseTex, Bntx.Texture mask, Bntx.Texture highlight)
+        // w, h: the baked size (the mask's, or the base map's when baked at that: Bake's baseSize).
+        static (byte[] color, byte[] emission) BakeLayers(MaterialData m, Bntx.Texture baseTex, Bntx.Texture mask, Bntx.Texture highlight, int w, int h)
         {
             // Legends Z-A's IkCharacter colours are linear: mixed with the (sRGB) base in linear space, back to sRGB after
             // (Lucario's chest layer 0.515, 0.49, 0.21 is its cream fur that way, a dark olive used as is). Scarlet/Violet's
             // layered materials stay as they were reviewed (the colours used as they are).
             bool linear = m.Shader == "IkCharacter";
-            int w = mask.Width, h = mask.Height;
+            bool maskSize = w == mask.Width && h == mask.Height;
             var color = new byte[w * h * 4];
             var emission = new byte[w * h * 4];
             bool anyEmission = false;
@@ -301,6 +308,8 @@ namespace PokeModelExporter.Scarlet
                 if (linear) b = ToLinear(b);
                 var c = b;
                 var e = Vector3.Zero;
+                var weights = maskSize ? new Vector4(mask.Rgba[p], mask.Rgba[p + 1], mask.Rgba[p + 2], mask.Rgba[p + 3]) / 255f
+                    : Sample(mask, (x + 0.5f) / w, (y + 0.5f) / h);
                 // The layers' colours mixed by their share of the mask, then over the base by the total: where two
                 // layers meet (half one, half the other) the edge goes straight from one colour to the next; applied one
                 // after another, a quarter of the (white) base showed through as a pale seam along every boundary.
@@ -308,7 +317,7 @@ namespace PokeModelExporter.Scarlet
                 float total = 0;
                 for (int i = 0; i < 4; i++)
                 {
-                    float weight = Math.Min(1f, mask.Rgba[p + i] / 255f * scales[i]);
+                    float weight = Math.Min(1f, (i == 0 ? weights.X : i == 1 ? weights.Y : i == 2 ? weights.Z : weights.W) * scales[i]);
                     if (weight <= 0) continue;
                     if (layers[i] is Vector4 layer)
                     {

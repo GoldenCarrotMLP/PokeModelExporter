@@ -316,7 +316,7 @@ switch (rest[0])
         int form = rest.Count > 2 && int.TryParse(rest[2], out int f) ? f : 0;
         int gender = rest.Count > 3 && int.TryParse(rest[3], out int g) ? g : 0;
         var watch = System.Diagnostics.Stopwatch.StartNew();
-        var result = exporter.Export(species, form, gender, new SvExporter.Options { Shiny = rest.Contains("--shiny"), ExtraImages = false });
+        var result = exporter.Export(species, form, gender, new SvExporter.Options { Shiny = rest.Contains("--shiny"), ExtraImages = false, MainClipSetOnly = true, OtherSetsMoving = true }); // (as GameModels converts)
         if (result == null) { Console.Error.WriteLine($"#{species} is not in this game's catalog"); return 1; }
         Directory.CreateDirectory(outDir);
         File.WriteAllBytes(Path.Combine(outDir, "model.glb"), result.Glb);
@@ -1012,10 +1012,10 @@ switch (rest[0])
         foreach (var n in names) Console.WriteLine("  " + n);
         break;
     }
-    case "fxmodel": // fxmodel <model path in the archive> --out <file.glb>: a move's effect model (Earthquake's rocks...)
+    case "fxmodel": // fxmodel <model path in the archive> [--props] --out <file.glb>: a move's effect model (Earthquake's rocks...); --props: as PokeSim's HouseProps converts a field prop
     {
         int o = rest.IndexOf("--out");
-        var glb = SvExporter.ExportEffectModel(archive.Read, rest[1]);
+        var glb = SvExporter.ExportEffectModel(archive.Read, rest[1], props: rest.Contains("--props"));
         if (glb == null) { Console.Error.WriteLine("not found: " + rest[1]); return 1; }
         string outFile = Path.GetFullPath(o >= 0 ? rest[o + 1] : "fxmodel.glb");
         File.WriteAllBytes(outFile, glb);
