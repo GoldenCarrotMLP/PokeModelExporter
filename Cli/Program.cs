@@ -1367,8 +1367,21 @@ switch (rest[0])
         // crystal stand the boss is raised on). The den's dome (ej_raid_bgNN_dome02.trmdl, shader ProjField) is a model
         // the client loads itself.
         var RaidDen = Enumerable.Range(0, 18).SelectMany(n => new[] { "", "_crack01", "_crack02", "_crystal01", "_crystal_stand01" }
-            .Select(part => $"effect/battle_ej/ej_raid_bg00/ej_raid_bg{n:D2}{part}.ptcl")).ToArray();
+            .Select(part => $"effect/battle_ej/ej_raid_bg00/ej_raid_bg{n:D2}{part}.ptcl"))
+            // The raid's start demo (demo/ee/ee326, the intro after the crystal closes round the player): its timeline
+            // has TR_1..4 / DEF_1..4 / BALL1..4 the stage times from code, so only its particles go in, by their own
+            // names: c01_light / c01_light2 (the rainbow streaks round the eye close-up), c02_light (the light round the
+            // boss's white silhouette), c03_glass / c03_flash (the crystal bursting at the camera), c08_concentrated (the
+            // speed lines of the wide shot); its camera cuts go in with the catch's (ee326_c01_cam: the eye, on TR_1;
+            // ee326_c03_cam: the four trainers in a row, then on to the boss).
+            .Concat(new[] { "c01_light", "c01_light2", "c02_light", "c03_glass", "c03_flash", "c08_concentrated" }.Select(n => $"effect/battle_ee/ee326/ee326_{n}.ptcl")).ToArray();
         var CatchSuccessExtras = new[] { "effect/battle_ee/ee105/ee105_01_sucsess_ground_top.ptcl", "effect/battle_ee/ee105/ee105_01_sucsess_ground_under.ptcl", "effect/battle_ee/ee105/ee105_sucsess_warp.ptcl" };
+        // A Terastallized Pokemon's resident crown set per Tera type (effect/battle_ej/ej_NN/ej_crownNN.ptcl, 00-17 and 99
+        // Stellar; the game's code puts it on the Pokemon's head for as long as it's Terastallized), into tera.json by its own
+        // name. PokeSim plays only its glints (kira_body, dust_cross, dust_cross_2), not the crown (owner 2026-10-17 / 2026-11-04);
+        // and the set's prism ring on the floor round its feet (ej_prismNN, at its origin locator).
+        var TeraCrowns = Enumerable.Range(0, 18).Select(n => n.ToString("D2")).Append("99")
+            .SelectMany(n => new[] { $"effect/battle_ej/ej_{n}/ej_crown{n}.ptcl", $"effect/battle_ej/ej_{n}/ej_prism{n}.ptcl" }).ToArray();
         var teraTimeline = "demo/ej/ej_transform01/ej_transform01.trtml";
         bool wantTera = only.Count == 0 || only.Contains(Tera);
         if (wantTera) byMove[Tera] = new List<string> { teraTimeline };
@@ -1479,8 +1492,12 @@ switch (rest[0])
                     extraScenes[stem] = sots.Skip(1).ToList();
                 }
                 // The catch demo's own camera animation.
+                cameras = new Dictionary<string, TrinityAnimationReader.CameraClip>();
                 if (archive.Read("demo/ej/ej_raid_hokaku01/ej_raid_hokaku01_cam.trcma") is byte[] catchCam)
-                    cameras = new Dictionary<string, TrinityAnimationReader.CameraClip> { ["ej_raid_hokaku01_cam"] = TrinityAnimationReader.ReadCamera(catchCam) };
+                    cameras["ej_raid_hokaku01_cam"] = TrinityAnimationReader.ReadCamera(catchCam);
+                // (the start demo's: ee326_c01_cam, ee326_c03_cam)
+                foreach (var cut in new[] { "ee326_c01_cam", "ee326_c03_cam" })
+                    if (archive.Read($"demo/ee/ee326/{cut}.trcma") is byte[] cma) cameras[cut] = TrinityAnimationReader.ReadCamera(cma);
             }
             if (kv.Key == Tera)
             {
@@ -1499,7 +1516,7 @@ switch (rest[0])
             string json = SvMoveFx.Export(kv.Key, timelines, scenes, archive.Read, out int count,
                 (path, name, cx, cy) => { if (!textureSources.ContainsKey(name)) textureSources[name] = (path, cx, cy); },
                 (path, name, prim) => { if (!primitiveShapes.ContainsKey(name)) { var shape = FxPrimitiveShape.Analyze(prim); shape.Source = path; primitiveShapes[name] = shape; } },
-                kv.Key == Evolution ? EvolutionFolder + "/sd9110_evolution" : folder, extraScenes, cameras, kv.Key == Picnic ? icons : kv.Key == BallThrow - 4 ? CatchSuccessExtras : kv.Key == Raid ? RaidDen : null,
+                kv.Key == Evolution ? EvolutionFolder + "/sd9110_evolution" : folder, extraScenes, cameras, kv.Key == Picnic ? icons : kv.Key == BallThrow - 4 ? CatchSuccessExtras : kv.Key == Raid ? RaidDen : kv.Key == Tera ? TeraCrowns : null,
                 kv.Key == Evolution ? new Dictionary<string, string> { ["TARGET_1"] = "ATK", ["TARGET_2"] = "DEF" }
                     : kv.Key == Raid ? new Dictionary<string, string> { ["BG_OBJ_1"] = "ATK" } : null,
                 kv.Key == Evolution ? name => name.StartsWith("eff.", StringComparison.Ordinal) && archive.Read($"{EvolutionFolder}/sd9110_{name.Substring(4)}.ptcl") != null
