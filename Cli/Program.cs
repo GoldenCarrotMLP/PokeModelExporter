@@ -979,6 +979,48 @@ switch (rest[0])
         break;
     }
 
+    case "raids": // raids --dex <dex.json> --out <file.json>: the Tera Raid tables in PokeSim's raid format (SvRaidImport)
+    {
+        int dx = rest.IndexOf("--dex"), o = rest.IndexOf("--out");
+        if (dx < 0 || o < 0) { Console.Error.WriteLine("raids --dex <dex.json> --out <file.json>"); return 1; }
+        var ids = new Dictionary<(int, int), string>();
+        var moves = new Dictionary<int, string>();
+        using (var doc = System.Text.Json.JsonDocument.Parse(File.ReadAllText(rest[dx + 1])))
+        {
+            foreach (var sp in doc.RootElement.GetProperty("species").EnumerateObject())
+            {
+                int num = sp.Value.TryGetProperty("num", out var n) ? n.GetInt32() : 0;
+                int forme = sp.Value.TryGetProperty("formeIndex", out var fi) ? fi.GetInt32() : 0;
+                if (num > 0 && !ids.ContainsKey((num, forme))) ids[(num, forme)] = sp.Name;
+            }
+            foreach (var mv in doc.RootElement.GetProperty("moves").EnumerateObject())
+            {
+                int num = mv.Value.TryGetProperty("num", out var n) ? n.GetInt32() : 0;
+                string name = mv.Value.TryGetProperty("name", out var nm) ? nm.GetString() : null;
+                // (the Z-Moves and Max Moves share numbers with nothing ordinary; the first plain one wins)
+                if (num > 0 && name != null && !moves.ContainsKey(num) && !mv.Name.StartsWith("max", StringComparison.Ordinal)) moves[num] = name;
+            }
+        }
+        var import = new SvRaidImport(archive.Read,
+            (national, form) => ids.TryGetValue((national, form), out var id) ? id : ids.TryGetValue((national, 0), out var baseId) ? baseId : null,
+            move => moves.TryGetValue(move, out var name) ? name : null);
+        var result = import.Run();
+        string outFile = Path.GetFullPath(rest[o + 1]);
+        Directory.CreateDirectory(Path.GetDirectoryName(outFile));
+        File.WriteAllText(outFile, BfbsSchema.ToJson(result) + Environment.NewLine);
+        // --frames <file>: the moves' raid lengths on their own too (beside the move effects, for the clients).
+        int fr = rest.IndexOf("--frames");
+        if (fr >= 0)
+        {
+            string framesFile = Path.GetFullPath(rest[fr + 1]);
+            Directory.CreateDirectory(Path.GetDirectoryName(framesFile));
+            File.WriteAllText(framesFile, BfbsSchema.ToJson(result["raidFrames"], indent: false));
+        }
+        foreach (var line in import.Log) Console.WriteLine(line);
+        Console.WriteLine($"raids -> {outFile}");
+        break;
+    }
+
     case "rootmotion": // rootmotion <national dex> [--clip part]: bones near the skeleton's top whose translation travels over a clip
     {
         var model = LoadModelFrom(archive, rest, out string folder);
@@ -1351,9 +1393,17 @@ switch (rest[0])
         // burst, the foes' debuff). Each timeline's objects are in its own scene files (_0, or _start_0 + _loop_0); the
         // shield's BG_OBJ_1 (the raid's background spot behind the boss) is the boss here.
         const int Raid = -3005;
-        var raidNames = new[] { "powercharge", "powercharge_success", "powercharge_failue", "special01", "special02", "special03" };
+        // Also (Docs/tera-raid-research.md 4.1): gameover (the low-time warning, its lightning loop left on), lose01 (time
+        // up: the beam, white strobes), win01 (debilitated: the shards in its Tera type's colour, the crown falling, the
+        // slump), down (the slump without the crystal), no_hokaku01 (left alone: the mist), resortie (back after a faint),
+        // and from demo/ej (their objects in world/obj_template/parts/demo/ej/<name>_): cheer01-03 and hokaku01 (the catch
+        // demo, with its camera animation).
+        var raidNames = new[] { "powercharge", "powercharge_success", "powercharge_failue", "special01", "special02", "special03",
+            "gameover", "lose01", "win01", "down", "no_hokaku01", "resortie" };
+        var raidDemos = new[] { "cheer01", "cheer02", "cheer03", "hokaku01" };
         if (only.Count == 0 || only.Contains(Raid))
-            byMove[Raid] = raidNames.Select(n => $"effect/battle_ej/ej_raid_{n}/ej_raid_{n}.trtml").ToList();
+            byMove[Raid] = raidNames.Select(n => $"effect/battle_ej/ej_raid_{n}/ej_raid_{n}.trtml")
+                .Concat(raidDemos.Select(n => $"demo/ej/ej_raid_{n}/ej_raid_{n}.trtml")).ToList();
         bool za = SvCatalog.Open(archive.Read)?.Game == "legends-za";
         byte[] megaScene = null;
         if (za)
@@ -1422,10 +1472,15 @@ switch (rest[0])
                 {
                     string dir = $"effect/battle_ej/{stem}/";
                     var sots = new[] { "", "_start", "_loop" }.Select(s => archive.Read($"{dir}{stem}{s}_0.trsot")).Where(b => b != null).ToList();
+                    // (the demos' objects: world/obj_template/parts/demo/ej/<stem>_/<stem>_0.trsot)
+                    if (sots.Count == 0 && archive.Read($"world/obj_template/parts/demo/ej/{stem}_/{stem}_0.trsot") is byte[] part) sots.Add(part);
                     if (sots.Count == 0) continue;
                     scenes[stem] = sots[0];
                     extraScenes[stem] = sots.Skip(1).ToList();
                 }
+                // The catch demo's own camera animation.
+                if (archive.Read("demo/ej/ej_raid_hokaku01/ej_raid_hokaku01_cam.trcma") is byte[] catchCam)
+                    cameras = new Dictionary<string, TrinityAnimationReader.CameraClip> { ["ej_raid_hokaku01_cam"] = TrinityAnimationReader.ReadCamera(catchCam) };
             }
             if (kv.Key == Tera)
             {
