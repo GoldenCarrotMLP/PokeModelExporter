@@ -117,6 +117,7 @@ namespace PokeModelExporter.Scarlet
             if (options.Animations && options.MainClipSetOnly && model.Animations.Count > 0 && MainClipSet(model.Animations.Select(a => a.Name)) is char mainSet)
                 KeepLocatorSet(model, mainSet);
             ScaleCompensation.Apply(model); // after the node list is final (locators are expected last before this)
+            TranslationOnlyUv(model);
 
             var baked = SvMaterialBaker.Bake(model, read, engineMaps: true);
             Dictionary<string, byte[]> extra = null;
@@ -210,6 +211,29 @@ namespace PokeModelExporter.Scarlet
                 if (props) PropAlpha(m, map);
                 return map;
             }, null);
+        }
+
+        // Materials with UVTransformMode "T" (translate only: 150 eye materials) use only the offset of their UVScaleOffset; the
+        // scale they carry is not applied. Magnemite's eye says (2, 4) in the material and in every clip, its mesh UVs cover
+        // one 0.5 x 0.5 cell of the eye atlas (open / closed / half-closed, chosen by offsets of 0.5), so the scale would
+        // show the whole atlas (and the baker unfolded it 2 x 4): a grey disc with the pupils somewhere off it (owner
+        // 2026-11-05: "the eye looks completely missing"). Lumineon's right eye says (2, 4) too, Magikarp's and Cutiefly's
+        // right eyes (1, 0), which squashed the eye to one row of texels. Scale set to 1 in the material and its UV tracks.
+        public static void TranslationOnlyUv(ModelData model)
+        {
+            var translateOnly = new HashSet<string>();
+            foreach (var m in model.Materials)
+            {
+                if (!m.ShaderOptions.TryGetValue("UVTransformMode", out var mode) || mode != "T") continue;
+                translateOnly.Add(m.Name);
+                if (m.Colors.TryGetValue("UVScaleOffset", out var st)) m.Colors["UVScaleOffset"] = new System.Numerics.Vector4(1, 1, st.Z, st.W);
+            }
+            if (translateOnly.Count == 0) return;
+            static Keys<float> One(Keys<float> keys) =>
+                keys == null ? null : new Keys<float> { Times = (float[])keys.Times.Clone(), Values = keys.Values.Select(_ => 1f).ToArray() };
+            foreach (var anim in model.Animations)
+                foreach (var t in anim.MaterialTracks)
+                    if (t.Parameter == "UVScaleOffset" && translateOnly.Contains(t.Material)) { t.R = One(t.R); t.G = One(t.G); }
         }
 
         // What a field prop draws, by the game's own material data rather than names (owner 2026-10-29: the props kept

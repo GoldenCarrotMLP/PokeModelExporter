@@ -467,6 +467,11 @@ namespace PokeModelExporter.Scarlet
             // Blend 5 refracts the scene behind by texture 0 with the same strengths (compiled fragment programs).
             if (e.ShaderType == 2 || e.BlendType == 5) w.Name("distortion").BeginArray().Raw(N(e.DistortionStrength[0])).Raw(N(e.DistortionStrength[1])).EndArray();
             if (e.SoftParticle) w.Name("soft").Value(true);
+            // Fresnel alpha (colour block flag, after soft): the compiled fragment programs multiply alpha by
+            // smoothstep(sat((|N.V| - near) / (far - near))), near / far at EmitterStatic +1480 / +1484 (static tail 2, 3).
+            // Bite's "_fre" jaws (near 1, far 0): clear where they face the camera, solid at their outline.
+            if (e.FresnelAlpha && e.StaticTail != null && e.StaticTail.Length >= 4)
+                w.Name("fresnel").BeginArray().Raw(N(e.StaticTail[2])).Raw(N(e.StaticTail[3])).EndArray();
             // Primitive meshes by model name (shapes in primitives.json).
             if (e.PrimitiveId != ulong.MaxValue)
                 w.Name("primitive").Value(file.Primitives.TryGetValue(e.PrimitiveId, out var prim) ? prim.Name : e.PrimitiveId.ToString("X16"));
