@@ -1021,6 +1021,38 @@ switch (rest[0])
         break;
     }
 
+    case "spawns": // spawns --dex <dex.json> --out <file.json>: where the wild Pokemon live (biome tags, media, which biomes border which) in PokeSim's spawn format (SvSpawnImport)
+    {
+        int dx = rest.IndexOf("--dex"), o = rest.IndexOf("--out");
+        if (dx < 0 || o < 0) { Console.Error.WriteLine("spawns --dex <dex.json> --out <file.json>"); return 1; }
+        var ids = new Dictionary<(int, int), string>();
+        using (var doc = System.Text.Json.JsonDocument.Parse(File.ReadAllText(rest[dx + 1])))
+            foreach (var sp in doc.RootElement.GetProperty("species").EnumerateObject())
+            {
+                int num = sp.Value.TryGetProperty("num", out var n) ? n.GetInt32() : 0;
+                int forme = sp.Value.TryGetProperty("formeIndex", out var fi) ? fi.GetInt32() : 0;
+                if (num > 0 && !ids.ContainsKey((num, forme))) ids[(num, forme)] = sp.Name;
+            }
+        var personal = new SvPersonal(archive.Read(SvPersonal.Path), SvPersonal.FieldShift(SvCatalog.Open(archive.Read)?.Game));
+        var nationalOf = new Dictionary<int, int>();
+        for (int national = 1; national <= 1025; national++)
+        {
+            int internalNo = personal.CatalogSpecies(national, 0);
+            if (internalNo > 0 && !nationalOf.ContainsKey(internalNo)) nationalOf[internalNo] = national;
+        }
+        // (a form Showdown has no entry for, such as Deerling's seasons, is its base species)
+        var import = new SvSpawnImport(archive.Read,
+            (national, form) => ids.TryGetValue((national, form), out var id) ? id : ids.TryGetValue((national, 0), out var baseId) ? baseId : null,
+            internalNo => nationalOf.TryGetValue(internalNo, out int nat) ? nat : 0);
+        var result = import.Run();
+        string outFile = Path.GetFullPath(rest[o + 1]);
+        Directory.CreateDirectory(Path.GetDirectoryName(outFile));
+        File.WriteAllText(outFile, BfbsSchema.ToJson(result, indent: false) + "\n");
+        foreach (var line in import.Log) Console.WriteLine(line);
+        Console.WriteLine($"spawns -> {outFile}");
+        break;
+    }
+
     case "rootmotion": // rootmotion <national dex> [--clip part]: bones near the skeleton's top whose translation travels over a clip
     {
         var model = LoadModelFrom(archive, rest, out string folder);
