@@ -1053,6 +1053,50 @@ switch (rest[0])
         break;
     }
 
+    case "messages": // messages --hashes <hashes_inside_fd.txt> [--lang English] [--only btl_] [--scripts] [--raw] --out <dir>: the game's message text as JSON (GameText)
+    {
+        int h = rest.IndexOf("--hashes"), o = rest.IndexOf("--out"), lg = rest.IndexOf("--lang"), on = rest.IndexOf("--only");
+        if (h < 0 || o < 0) { Console.Error.WriteLine("messages --hashes <list> [--lang English] [--only <name prefix>] [--scripts] --out <dir>"); return 1; }
+        string lang = lg >= 0 ? rest[lg + 1] : "English", only = on >= 0 ? rest[on + 1] : "";
+        bool scripts = rest.Contains("--scripts");
+        string prefix = $"message/dat/{lang}/";
+        // Every .dat the hash list names under message/dat/<lang>/common (and script/ with --scripts) that the archive has.
+        var dats = File.ReadLines(rest[h + 1]).Select(l => l.Split(' ')).Where(p => p.Length >= 2).Select(p => p[1].Trim())
+            .Where(n => n.StartsWith(prefix, StringComparison.Ordinal) && n.EndsWith(".dat", StringComparison.Ordinal))
+            .Select(n => n.Substring(prefix.Length, n.Length - prefix.Length - 4))
+            .Where(n => (n.StartsWith("common/", StringComparison.Ordinal) || scripts && n.StartsWith("script/", StringComparison.Ordinal))
+                && n.Substring(n.IndexOf('/') + 1).StartsWith(only, StringComparison.Ordinal))
+            .Distinct().OrderBy(n => n, StringComparer.Ordinal).ToList();
+        string outDir = Path.GetFullPath(Path.Combine(rest[o + 1], lang));
+        var jsonOptions = new System.Text.Json.JsonSerializerOptions { Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping };
+        var index = new SortedDictionary<string, int>(StringComparer.Ordinal);
+        int lines = 0, unlabelled = 0;
+        foreach (var name in dats)
+        {
+            if (!archive.Contains(prefix + name + ".dat")) continue;
+            byte[] dat = archive.Read(prefix + name + ".dat");
+            byte[] tbl = archive.Contains(prefix + name + ".tbl") ? archive.Read(prefix + name + ".tbl") : null;
+            var read = GameText.Read(dat, tbl);
+            var map = new Dictionary<string, string>(); // (insertion order: the file's line order)
+            for (int i = 0; i < read.Count; i++)
+            {
+                string key = string.IsNullOrEmpty(read[i].Label) || map.ContainsKey(read[i].Label) ? "#" + i : read[i].Label;
+                if (key[0] == '#') unlabelled++;
+                map[key] = read[i].Text;
+            }
+            var doc = new Dictionary<string, object> { ["format"] = 1, ["language"] = lang, ["file"] = name, ["lines"] = map };
+            string file = Path.Combine(outDir, name.Replace('/', Path.DirectorySeparatorChar) + ".json");
+            Directory.CreateDirectory(Path.GetDirectoryName(file));
+            File.WriteAllText(file, System.Text.Json.JsonSerializer.Serialize(doc, jsonOptions) + "\n");
+            index[name] = read.Count;
+            lines += read.Count;
+        }
+        File.WriteAllText(Path.Combine(outDir, "index.json"), System.Text.Json.JsonSerializer.Serialize(
+            new Dictionary<string, object> { ["format"] = 1, ["language"] = lang, ["tokens"] = GameText.TokenFormat, ["files"] = index }, jsonOptions) + "\n");
+        Console.WriteLine($"{index.Count} message files, {lines} lines ({unlabelled} without a label) -> {outDir}");
+        break;
+    }
+
     case "rootmotion": // rootmotion <national dex> [--clip part]: bones near the skeleton's top whose translation travels over a clip
     {
         var model = LoadModelFrom(archive, rest, out string folder);
