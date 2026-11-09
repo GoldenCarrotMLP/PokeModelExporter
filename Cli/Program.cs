@@ -1461,6 +1461,17 @@ switch (rest[0])
         var teraTimeline = "demo/ej/ej_transform01/ej_transform01.trtml";
         bool wantTera = only.Count == 0 || only.Contains(Tera);
         if (wantTera) byMove[Tera] = new List<string> { teraTimeline };
+        // A Terastallized Pokemon fainting, as -3006 (tera_down.json): the timeline with its shared scene objects and every
+        // type's (ej_transform_down00..17, 99: the body debris); the crown fade stays in the data but PokeSim doesn't play it.
+        const int TeraDown = -3006;
+        const string TeraDownFolder = "effect/battle_ej/ej_transform_down";
+        var teraDownTimeline = $"{TeraDownFolder}/ej_transform_down.trtml";
+        if (only.Count == 0 || only.Contains(TeraDown)) byMove[TeraDown] = new List<string> { teraDownTimeline, $"{TeraDownFolder}/ej_transform_down_0.trsot" };
+        // Ordinary faints (the timelines live in demo/, their effects in effect/battle_ee): ee620 a trainer's Pokemon (the
+        // camera against its trainer, the white flare, the recall overlapping the fall), ee621 a wild one's.
+        const int FaintTrainer = -1620, FaintWild = -1621;
+        if (only.Count == 0 || only.Contains(FaintTrainer)) byMove[FaintTrainer] = new List<string> { "demo/ee/ee620/ee620.trtml", "effect/battle_ee/ee620/ee620_0.trsot" };
+        if (only.Count == 0 || only.Contains(FaintWild)) byMove[FaintWild] = new List<string> { "demo/ee/ee621/ee621.trtml", "effect/battle_ee/ee621/ee621_0.trsot" };
         // Mega Evolution (Docs/mega-research.md), as -3002 (mega.json), from Legends Z-A (--game <legends-za>): the Pokemon's
         // part of the cinematic (ik_demo/ee/m_shinka_poke) and every species' own (m_shinka_pm<dex>[x|y|z]), sharing one
         // scene file (m_shinka_cmn). The trainer's parts (m_shinka_pc, m_shinka_tr*) wait for trainer models. Only this from
@@ -1522,7 +1533,8 @@ switch (rest[0])
         // Textures and primitives keep the file they were first analysed from (a name can be in several files, encoded a
         // little differently): the moves first, then the battle's system effects (es, ee, etb, eb, the picnic: -1, -2...),
         // Terastallization last.
-        foreach (var kv in byMove.OrderBy(k => k.Key == Tera ? 2 : k.Key > 0 ? 0 : 1).ThenBy(k => k.Key > 0 ? k.Key : -k.Key))
+        // (Added later and so last: the faint cinematics, so no texture the others have changes the file it's analysed from.)
+        foreach (var kv in byMove.OrderBy(k => k.Key == Tera ? 2 : k.Key == TeraDown || k.Key == FaintTrainer || k.Key == FaintWild ? 3 : k.Key > 0 ? 0 : 1).ThenBy(k => k.Key > 0 ? k.Key : -k.Key))
         {
             var timelines = new Dictionary<string, byte[]>();
             var scenes = new Dictionary<string, byte[]>();
@@ -1586,7 +1598,14 @@ switch (rest[0])
                     if (archive.Read($"demo/ej/ej_transform01/ej_transform01_cam_c{c:D3}.trcma") is byte[] cma)
                         cameras[$"ej_transform01_cam_c{c:D3}"] = TrinityAnimationReader.ReadCamera(cma);
             }
-            string folder = kv.Key == Picnic ? "effect/appli/picnic" : kv.Key == Mega ? "ik_demo/ee/m_shinka" : kv.Key == Rogue ? "ik_effect/data/field/m_bousou/cmn" : kv.Key == Raid ? "effect/battle_ej/ej_raid" : kv.Key == Tera ? "demo/ej/ej_transform01"
+            if (kv.Key == TeraDown)
+            {
+                var down = new List<byte[]>();
+                foreach (var t in Enumerable.Range(0, 18).Select(i => i.ToString("D2")).Append("99"))
+                    if (archive.Read($"effect/battle_ej/ej_transform_down{t}/ej_transform_down{t}_0.trsot") is byte[] sot) down.Add(sot);
+                extraScenes = new Dictionary<string, IReadOnlyList<byte[]>> { ["ej_transform_down"] = down };
+            }
+            string folder = kv.Key == TeraDown ? TeraDownFolder : kv.Key == Picnic ? "effect/appli/picnic" : kv.Key == Mega ? "ik_demo/ee/m_shinka" : kv.Key == Rogue ? "ik_effect/data/field/m_bousou/cmn" : kv.Key == Raid ? "effect/battle_ej/ej_raid" : kv.Key == Tera ? "demo/ej/ej_transform01"
                 : kv.Key <= -2100 ? $"effect/battle_eb/eb{-2100 - kv.Key:D3}" : kv.Key <= -2000 ? $"effect/battle_etb/etb{-2000 - kv.Key:D3}"
                 : kv.Key <= -1000 ? $"effect/battle_ee/ee{-1000 - kv.Key:D3}" : kv.Key < 0 ? $"effect/battle_es/es{-kv.Key:D3}" : null;
             string json = SvMoveFx.Export(kv.Key, timelines, scenes, archive.Read, out int count,
@@ -1597,7 +1616,7 @@ switch (rest[0])
                     : kv.Key == Raid ? new Dictionary<string, string> { ["BG_OBJ_1"] = "ATK" } : null,
                 kv.Key == Evolution ? name => name.StartsWith("eff.", StringComparison.Ordinal) && archive.Read($"{EvolutionFolder}/sd9110_{name.Substring(4)}.ptcl") != null
                     ? $"{EvolutionFolder}/sd9110_{name.Substring(4)}.ptcl" : null : null);
-            string file = Path.Combine(outDir, kv.Key == Picnic ? "picnic.json" : kv.Key == Mega ? "mega.json" : kv.Key == Rogue ? "rogue.json" : kv.Key == Raid ? "raid.json" : kv.Key == Tera ? "tera.json" : kv.Key == Evolution ? "evolution.json"
+            string file = Path.Combine(outDir, kv.Key == TeraDown ? "tera_down.json" : kv.Key == Picnic ? "picnic.json" : kv.Key == Mega ? "mega.json" : kv.Key == Rogue ? "rogue.json" : kv.Key == Raid ? "raid.json" : kv.Key == Tera ? "tera.json" : kv.Key == Evolution ? "evolution.json"
                 : kv.Key <= -2100 ? $"eb{-2100 - kv.Key:D3}.json" : kv.Key <= -2000 ? $"etb{-2000 - kv.Key:D3}.json"
                 : kv.Key <= -1000 ? $"ee{-1000 - kv.Key:D3}.json" : kv.Key < 0 ? $"es{-kv.Key:D3}.json" : $"{kv.Key:D4}.json");
             File.WriteAllText(file, json);
