@@ -1170,6 +1170,46 @@ switch (rest[0])
         foreach (var line in SvSceneObjects.Describe(data)) Console.WriteLine(line);
         break;
     }
+    case "clipsets": // clipsets: over the catalog, each model's clips by set (0 standing, 1 swimming, 2 flying) and the set-change clips' lengths, tab-separated
+    {
+        var catalog = SvCatalog.Open(archive.Read);
+        var personal = new SvPersonal(archive.Read(SvPersonal.Path), SvPersonal.FieldShift(catalog?.Game));
+        var national = new Dictionary<int, int>();
+        for (int n = 1; n <= 1025; n++) { int s = personal.CatalogSpecies(n, 0); if (!national.ContainsKey(s)) national[s] = n; }
+        string[] watch = { "00150_jumpup01_start", "00151_jumpup01_loop", "00152_jumpdown01_start", "00153_jumpdown01_loop", "00155_land02",
+                           "20150_jumpup01_start", "20151_jumpup01_loop", "20152_jumpdown01_start", "20153_jumpdown01_loop", "20155_land02" };
+        Console.WriteLine("folder\tnational\tform\tset0\tset1\tset2\tground_move\tsky_move\tstate_change\t" + string.Join("\t", watch) + "\tothers");
+        foreach (var entry in catalog.Entries.GroupBy(e => e.ModelPath).Select(g => g.First()))
+        {
+            string folder = entry.DataRoot + entry.Folder;
+            Func<string, byte[]> read = file => archive.Read(folder + file);
+            ModelData model;
+            try { model = TrinityModelReader.ReadSkeletonOnly(entry.ModelPath.Substring(entry.Folder.Length), read); }
+            catch (Exception) { continue; }
+            if (model == null) continue;
+            var tracr = read(model.Name + "_base.tracr");
+            if (tracr == null) continue;
+            var names = TrinityAnimationReader.ClipNamesFromResource(tracr)
+                .Select(f => Path.GetFileNameWithoutExtension(f).Substring(model.Name.Length + 1)).Distinct().ToList();
+            int Count(char d) => names.Count(n => n.Length > 5 && n[0] == d && char.IsDigit(n[1]));
+            bool Moves(char d) => names.Contains(d + "0030_walk01_loop") || names.Contains(d + "0000_defaultwait01_loop");
+            SvAnimController controller = null;
+            try { controller = SvAnimController.Read(model.Name, read); } catch (Exception) { }
+            bool change = false;
+            void Find(SvAnimController.State s) { if (s == null) return; if (s.Leaf == "poke_state_change") change = true; foreach (var c in s.Children) Find(c); }
+            Find(controller?.Body);
+            var lengths = watch.Select(w =>
+            {
+                string file = TrinityAnimationReader.ClipNamesFromResource(tracr).FirstOrDefault(f => f.EndsWith("_" + w + ".tranm"));
+                if (file == null) return "-";
+                try { var a = TrinityAnimationReader.Read(read(file), w); return (a.FrameCount / a.FramesPerSecond).ToString("0.##"); } catch (Exception) { return "?"; }
+            });
+            var others = names.Where(n => (n.StartsWith("0") || n.StartsWith("2")) && System.Text.RegularExpressions.Regex.IsMatch(n, "fly|land|take|fall|air|glide|hover|jump|perch")).Where(n => !watch.Contains(n));
+            Console.WriteLine($"{entry.Folder.TrimEnd('/')}\t{(national.TryGetValue(entry.Species, out int nat) ? nat : -entry.Species)}\t{entry.Form}\t{Count('0')}\t{Count('1')}\t{Count('2')}\t{Moves('0')}\t{Moves('2')}\t{change}\t{string.Join("\t", lengths)}\t{string.Join(",", others)}");
+        }
+        break;
+    }
+
     case "clipfit": // clipfit [national dex...]: over the catalog (or these species), the clips the converter swaps for the one their state plays (aliases) or leaves out as made for another skeleton (SvExporter.Misfit)
     {
         var catalog = SvCatalog.Open(archive.Read);

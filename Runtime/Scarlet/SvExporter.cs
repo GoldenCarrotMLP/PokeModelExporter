@@ -43,7 +43,7 @@ namespace PokeModelExporter.Scarlet
             public bool ExtraImages = true;
             public Func<string, bool> Clips; // which clips to keep (name without the model prefix, e.g. 00001_battlewait01_loop); null = all
             public bool MainClipSetOnly;     // only the main clip set (see MainClipSet)
-            public bool OtherSetsMoving;     // with MainClipSetOnly: also the other sets' moving-about clips (OtherSetClip)
+            public bool OtherSetsMoving;     // with MainClipSetOnly: also the other sets' moving-about, emote, battle and face clips (OtherSetClip)
             public IEnumerable<string> FolderFiles; // every file of the model folder, if known (hash list)
             public Donor Donor;              // another model of the species to inherit from (a Mega's base form), see BorrowClips
         }
@@ -472,7 +472,7 @@ namespace PokeModelExporter.Scarlet
         // aliases: the controller's ClipAliases (a state that plays another clip than the one it is named after: that
         // clip's data is loaded under the state's name). A clip made for another skeleton (Misfit) is left out.
         // otherSetsMoving (with mainSetOnly): the other sets' clips for moving about too (OtherSetClip: a swimmer's or a
-        // flyer's wait, walk, run, turns, take-off and landing), not their battle clips.
+        // flyer's wait, walk, run, turns, take-off and landing, emotes) and their battle clips and face layers.
         public static void LoadClips(ModelData model, Func<string, byte[]> read, Func<string, bool> filter = null, bool mainSetOnly = false, IEnumerable<string> always = null,
             IReadOnlyDictionary<string, string> aliases = null, bool otherSetsMoving = false)
         {
@@ -639,7 +639,9 @@ namespace PokeModelExporter.Scarlet
 
         // Locator sets match the clip sets (00000 standing, 10000 swimming, 20000 floating/flying): the same names at
         // other heights (Charizard's eff_rangeattack01 is 0.69 m up standing, 1.32 m flying). With one clip set,
-        // keep only its locators so a name means one point.
+        // keep only its locators so a name means one point. A set whose battle clips are kept too (OtherSetClip, since
+        // 2026-11-13: a swimmer's or a standing flyer's battle set over water) keeps its locators as "<name>@<digit>"
+        // (Charizard's eff_mouth01@2, Buizel's eff_center01@1): the game picks those while it battles in that set.
         static void KeepLocatorSet(ModelData model, char clipSet)
         {
             var sets = model.Nodes.Where(n => n.IsLocator).Select(n => n.LocatorSet).Distinct().ToList();
@@ -647,12 +649,15 @@ namespace PokeModelExporter.Scarlet
             if (keep == null || sets.Count < 2) return;
             int firstLocator = model.Nodes.FindIndex(n => n.IsLocator);
             if (model.Nodes.Skip(firstLocator).Any(n => !n.IsLocator)) return; // locators are expected last
+            var battleSets = new HashSet<char>(model.Animations.Where(a => a.Name.Length > 6 && a.Name[0] != clipSet && OtherSetBattleParts.Any(p => a.Name.Contains(p))).Select(a => a.Name[0]));
+            bool Also(string set) => !string.IsNullOrEmpty(set) && battleSets.Contains(set[0]) && sets.Count(s => !string.IsNullOrEmpty(s) && s[0] == set[0]) == 1;
             var map = new int[model.Nodes.Count];
             var kept = new List<NodeData>();
             for (int i = 0; i < model.Nodes.Count; i++)
             {
                 var n = model.Nodes[i];
-                if (n.IsLocator && n.LocatorSet != keep) { map[i] = -1; continue; }
+                if (n.IsLocator && n.LocatorSet != keep && !Also(n.LocatorSet)) { map[i] = -1; continue; }
+                if (n.IsLocator && n.LocatorSet != keep) n.Name += "@" + n.LocatorSet[0];
                 map[i] = kept.Count;
                 kept.Add(n);
             }
@@ -662,10 +667,19 @@ namespace PokeModelExporter.Scarlet
 
         // The clips of a set other than the main one worth having (owner 2026-11-02: Buizel swimming in the world, the
         // flyers flying): moving about in the water or the air (wait, idles, walk, run, turns), getting in and out of it
-        // (jumps, landing, stepping out), noticing someone. Not the battle's (the battle plays the main set).
-        static readonly string[] OtherSetParts = { "defaultwait", "defaultidle", "walk0", "run0", "turn_", "jumpup", "jumpdown", "land0", "stepout", "notice", "takeoff", "fly", "glide", "dive", "swim" };
+        // (jumps, landing, stepping out), noticing someone.
+        static readonly string[] OtherSetParts = { "defaultwait", "defaultidle", "walk0", "run0", "turn_", "jumpup", "jumpdown", "land0", "stepout", "notice", "takeoff", "fly", "glide", "dive", "swim",
+            // (since 2026-11-13, owner: one that walks and flies rests, sleeps and eats on the ground, PokeSim World.Flight: the
+            // overworld loops and emotes too, so a sky-main Noivern sleeps in its standing set and a standing one roars aloft)
+            "rest0", "sleep0", "eat0", "glad0", "roar0", "hate0", "refresh0", "wildshot0" };
 
-        public static bool OtherSetClip(string clip) => OtherSetParts.Any(p => clip.Contains(p));
+        // And (since 2026-11-13, owner: "keep every set's battle clips, and use them") their battle clips and face layers: a
+        // swimmer battling in water plays its swimming set's (Buizel, Pikachu: 10001 battlewait .. 10520 down01), a flyer that
+        // stands in battle battles over water in its flying set's (Charizard: 20001 .. 20520, its 28000 eye / 28100 mouth).
+        static readonly string[] OtherSetBattleParts = { "battlewait", "battleidle", "attack0", "damage0", "stun0", "down0" };
+
+        public static bool OtherSetClip(string clip) => OtherSetParts.Any(p => clip.Contains(p)) || OtherSetBattleParts.Any(p => clip.Contains(p))
+            || clip.Length > 1 && clip[1] == '8'; // (x8xxx: the set's face layers, eye01 / mouth01 / loop01_loop)
 
         // Clips come in sets by their number's first digit: 0xxxx standing, 1xxxx swimming, 2xxxx floating
         // or flying. Many Pokemon have only one (Gyarados 1, Venomoth and Magnemite 2), some several:
